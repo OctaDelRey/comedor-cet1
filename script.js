@@ -1,35 +1,38 @@
-// Inicialización de datos en localStorage si no existen
-if (!localStorage.getItem('usuarios')) {
-  const usuarios = [
-    { usuario: 'admin', contraseña: 'admin123', tipo: 'admin' },
-    { usuario: 'alumno1', contraseña: 'alumno123', tipo: 'alumno', nombre: 'Juan Pérez', cursoDivision: '4to 1ra', emailTutores: 'padres.juan@ejemplo.com', strikes: 0, notificadoStrikes: false, bloqueado: false },
-    { usuario: 'alumno2', contraseña: 'alumno123', tipo: 'alumno', nombre: 'María García', cursoDivision: 'CB 2do 1ra', emailTutores: 'padres.maria@ejemplo.com', strikes: 0, notificadoStrikes: false, bloqueado: false }
-  ];
-  localStorage.setItem('usuarios', JSON.stringify(usuarios));
-}
-
-if (!localStorage.getItem('inscripcionesComedor')) {
-  localStorage.setItem('inscripcionesComedor', JSON.stringify([]));
-}
-
-if (!localStorage.getItem('menuDelDia')) {
-  localStorage.setItem('menuDelDia', JSON.stringify({}));
-}
-
-// Configuración de horarios
-if (!localStorage.getItem('configuracionHorarios')) {
-  const configuracion = {
-    horaLimiteInscripcion: '23:00', // Hora límite para inscribirse (ej: hasta las 11 PM)
-    horaLimiteCancelacion: '23:30'  // Hora límite para cancelar (ej: hasta las 11:30 PM)
-  };
-  localStorage.setItem('configuracionHorarios', JSON.stringify(configuracion));
-}
-
+// Variables globales
 let usuarioActual = null;
-
-// Variables para filtros de alumnos
 let alumnosFiltrados = [];
 let filtroActual = 'todos';
+
+// Esperar a que Firebase esté listo
+window.addEventListener('load', async () => {
+  // Inicializar datos por defecto si no existen
+  await inicializarDatos();
+});
+
+// Inicializar datos por defecto
+async function inicializarDatos() {
+  try {
+    const { collection, getDocs, setDoc, doc } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const snapshot = await getDocs(usuariosRef);
+    
+    // Si no hay usuarios, crear el admin y alumnos de ejemplo
+    if (snapshot.empty) {
+      const usuarios = [
+        { usuario: 'admin', contraseña: 'admin123', tipo: 'admin' },
+        { usuario: 'alumno1', contraseña: 'alumno123', tipo: 'alumno', nombre: 'Juan Pérez', cursoDivision: '4to 1ra', emailTutores: 'padres.juan@ejemplo.com', strikes: 0, notificadoStrikes: false, bloqueado: false },
+        { usuario: 'alumno2', contraseña: 'alumno123', tipo: 'alumno', nombre: 'María García', cursoDivision: 'CB 2do 1ra', emailTutores: 'padres.maria@ejemplo.com', strikes: 0, notificadoStrikes: false, bloqueado: false }
+      ];
+      
+      for (const user of usuarios) {
+        await setDoc(doc(window.db, 'usuarios', user.usuario), user);
+      }
+      console.log('Usuarios iniciales creados');
+    }
+  } catch (error) {
+    console.error('Error al inicializar datos:', error);
+  }
+}
 
 // Función para mostrar/ocultar formulario de registro
 function toggleFormularioRegistro() {
@@ -86,18 +89,51 @@ function estaAntesDeHora(horaLimite) {
 }
 
 // Función para verificar si puede inscribirse
-function puedeInscribirse() {
-  const config = JSON.parse(localStorage.getItem('configuracionHorarios'));
+async function puedeInscribirse() {
+  const config = await obtenerConfiguracion();
   return estaAntesDeHora(config.horaLimiteInscripcion);
 }
 
 // Función para verificar si puede cancelar
-function puedeCancelar() {
-  const config = JSON.parse(localStorage.getItem('configuracionHorarios'));
+async function puedeCancelar() {
+  const config = await obtenerConfiguracion();
   return estaAntesDeHora(config.horaLimiteCancelacion);
 }
 
-function login() {
+// Obtener configuración de horarios
+async function obtenerConfiguracion() {
+  try {
+    const { doc, getDocs, collection, setDoc } = window.firestore;
+    const configRef = doc(window.db, 'configuracion', 'horarios');
+    const configSnap = await getDocs(collection(window.db, 'configuracion'));
+    
+    let config = null;
+    configSnap.forEach(doc => {
+      if (doc.id === 'horarios') {
+        config = doc.data();
+      }
+    });
+    
+    if (!config) {
+      // Crear configuración por defecto
+      config = {
+        horaLimiteInscripcion: '23:00',
+        horaLimiteCancelacion: '23:30'
+      };
+      await setDoc(configRef, config);
+    }
+    
+    return config;
+  } catch (error) {
+    console.error('Error al obtener configuración:', error);
+    return {
+      horaLimiteInscripcion: '23:00',
+      horaLimiteCancelacion: '23:30'
+    };
+  }
+}
+
+async function login() {
   const usuario = document.getElementById('usuario').value;
   const contraseña = document.getElementById('contraseña').value;
   
@@ -107,42 +143,48 @@ function login() {
     return;
   }
   
-  const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-  
-  // Debug: mostrar usuarios disponibles en consola
-  console.log('Usuarios disponibles:', usuarios);
-  
-  const usuarioEncontrado = usuarios.find(u => u.usuario === usuario && u.contraseña === contraseña);
-  
-  if (usuarioEncontrado) {
-    usuarioActual = usuarioEncontrado;
-    console.log('Usuario encontrado:', usuarioActual);
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('usuario', '==', usuario), where('contraseña', '==', contraseña));
+    const snapshot = await getDocs(q);
     
-    document.getElementById('login').classList.add('oculto');
-    
-    if (usuarioActual.tipo === 'admin') {
-      document.getElementById('menuAdmin').classList.remove('oculto');
-      cargarInscripcionesComedor();
-      cargarMenuDelDia();
-      cargarListaAlumnos();
-      cargarEstadisticasDia();
-      cargarNotificaciones();
-      cargarConfiguracionHorarios();
-      mostrarNotificacion('Bienvenido, Administrador', 'success');
-    } else {
-      document.getElementById('menuAlumno').classList.remove('oculto');
-      // Mostrar información del alumno
-      document.getElementById('alumnoNombre').textContent = usuarioActual.nombre;
-      document.getElementById('alumnoCurso').textContent = usuarioActual.cursoDivision || 'No especificado';
+    if (!snapshot.empty) {
+      snapshot.forEach((doc) => {
+        usuarioActual = { id: doc.id, ...doc.data() };
+      });
       
-      verificarStrikes();
-      cargarMenuAlumno();
-      verificarInscripcionComedor();
-      mostrarNotificacion(`Bienvenido, ${usuarioActual.nombre}`, 'success');
+      console.log('Usuario encontrado:', usuarioActual);
+      
+      document.getElementById('login').classList.add('oculto');
+      
+      if (usuarioActual.tipo === 'admin') {
+        document.getElementById('menuAdmin').classList.remove('oculto');
+        cargarInscripcionesComedor();
+        cargarMenuDelDia();
+        cargarListaAlumnos();
+        cargarEstadisticasDia();
+        cargarNotificaciones();
+        cargarConfiguracionHorarios();
+        mostrarNotificacion('Bienvenido, Administrador', 'success');
+      } else {
+        document.getElementById('menuAlumno').classList.remove('oculto');
+        // Mostrar información del alumno
+        document.getElementById('alumnoNombre').textContent = usuarioActual.nombre;
+        document.getElementById('alumnoCurso').textContent = usuarioActual.cursoDivision || 'No especificado';
+        
+        verificarStrikes();
+        cargarMenuAlumno();
+        verificarInscripcionComedor();
+        mostrarNotificacion(`Bienvenido, ${usuarioActual.nombre}`, 'success');
+      }
+    } else {
+      console.log('Usuario no encontrado. Usuario ingresado:', usuario);
+      mostrarNotificacion('Usuario o contraseña incorrectos', 'error');
     }
-  } else {
-    console.log('Usuario no encontrado. Usuario ingresado:', usuario, 'Contraseña ingresada:', contraseña);
-    mostrarNotificacion('Usuario o contraseña incorrectos', 'error');
+  } catch (error) {
+    console.error('Error al iniciar sesión:', error);
+    mostrarNotificacion('Error al iniciar sesión', 'error');
   }
 }
 
@@ -158,7 +200,7 @@ function logout() {
   document.getElementById('contraseña').value = '';
 }
 
-function registrarAlumno() {
+async function registrarAlumno() {
   const nombre = document.getElementById('nombreAlumno').value;
   const usuario = document.getElementById('usuarioAlumno').value;
   const contraseña = document.getElementById('contraseñaAlumno').value;
@@ -178,39 +220,46 @@ function registrarAlumno() {
     return;
   }
   
-  const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-  
-  // Validar si el usuario ya existe
-  if (usuarios.find(u => u.usuario === usuario)) {
-    mostrarNotificacion('El usuario ya existe', 'error');
-    return;
+  try {
+    const { collection, getDocs, query, where, setDoc, doc } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('usuario', '==', usuario));
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty) {
+      mostrarNotificacion('El usuario ya existe', 'error');
+      return;
+    }
+    
+    // Construir cursoDivision
+    const cursoDivision = `${curso} ${division}`;
+    
+    // Agregar el nuevo alumno
+    const nuevoAlumno = {
+      usuario: usuario,
+      contraseña: contraseña,
+      tipo: 'alumno',
+      nombre: nombre,
+      cursoDivision: cursoDivision,
+      emailTutores: emailTutores,
+      strikes: 0,
+      notificadoStrikes: false,
+      bloqueado: false
+    };
+    
+    await setDoc(doc(window.db, 'usuarios', usuario), nuevoAlumno);
+    
+    mostrarNotificacion('Alumno registrado con éxito', 'success');
+    
+    // Cerrar formulario
+    toggleFormularioRegistro();
+    
+    // Actualizar lista de alumnos
+    cargarListaAlumnos();
+  } catch (error) {
+    console.error('Error al registrar alumno:', error);
+    mostrarNotificacion('Error al registrar alumno', 'error');
   }
-  
-  // Construir cursoDivision
-  const cursoDivision = `${curso} ${division}`;
-  
-  // Agregar el nuevo alumno
-  usuarios.push({
-    usuario: usuario,
-    contraseña: contraseña,
-    tipo: 'alumno',
-    nombre: nombre,
-    cursoDivision: cursoDivision,
-    emailTutores: emailTutores,
-    strikes: 0,
-    notificadoStrikes: false,
-    bloqueado: false
-  });
-  
-  localStorage.setItem('usuarios', JSON.stringify(usuarios));
-  
-  mostrarNotificacion('Alumno registrado con éxito', 'success');
-  
-  // Cerrar formulario
-  toggleFormularioRegistro();
-  
-  // Actualizar lista de alumnos
-  cargarListaAlumnos();
 }
 
 // Función para actualizar divisiones disponibles según el curso
@@ -226,27 +275,39 @@ function actualizarDivisiones() {
   `;
 }
 
-function cargarListaAlumnos() {
-  // Inicializar filtros
-  alumnosFiltrados = [];
-  filtroActual = 'todos';
-  document.getElementById('buscarAlumno').value = '';
-  
-  // Cargar todos los alumnos inicialmente
-  const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-  const alumnos = usuarios.filter(u => u.tipo === 'alumno');
-  alumnosFiltrados = alumnos;
-  
-  if (alumnos.length === 0) {
-    document.getElementById('listaAlumnos').innerHTML = '<p>No hay alumnos registrados</p>';
-    return;
+async function cargarListaAlumnos() {
+  try {
+    // Inicializar filtros
+    alumnosFiltrados = [];
+    filtroActual = 'todos';
+    document.getElementById('buscarAlumno').value = '';
+    
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    const alumnos = [];
+    snapshot.forEach((doc) => {
+      alumnos.push({ id: doc.id, ...doc.data() });
+    });
+    
+    alumnosFiltrados = alumnos;
+    
+    if (alumnos.length === 0) {
+      document.getElementById('listaAlumnos').innerHTML = '<p>No hay alumnos registrados</p>';
+      return;
+    }
+    
+    // Mostrar todos los alumnos
+    mostrarAlumnosFiltrados(alumnos);
+  } catch (error) {
+    console.error('Error al cargar alumnos:', error);
+    mostrarNotificacion('Error al cargar alumnos', 'error');
   }
-  
-  // Mostrar todos los alumnos
-  mostrarAlumnosFiltrados(alumnos);
 }
 
-function establecerMenuDelDia() {
+async function establecerMenuDelDia() {
   const menu = document.getElementById('menuDelDia').value;
   
   if (!menu) {
@@ -254,52 +315,86 @@ function establecerMenuDelDia() {
     return;
   }
   
-  const menuDelDia = {
-    fecha: getFechaActual(),
-    menu: menu
-  };
-  
-  localStorage.setItem('menuDelDia', JSON.stringify(menuDelDia));
-  
-  // Actualizar la visualización
-  cargarMenuDelDia();
-  
-  mostrarNotificacion('Menú del día establecido correctamente', 'success');
-}
-
-function cargarMenuDelDia() {
-  const menuDelDia = JSON.parse(localStorage.getItem('menuDelDia'));
-  const infoMenuDiv = document.getElementById('infoMenuDelDia');
-  const textoMenu = document.getElementById('textoMenuDelDia');
-  
-  if (menuDelDia && menuDelDia.fecha === getFechaActual()) {
-    infoMenuDiv.classList.remove('oculto');
-    textoMenu.textContent = menuDelDia.menu;
-  } else {
-    infoMenuDiv.classList.add('oculto');
+  try {
+    const { doc, setDoc } = window.firestore;
+    const menuRef = doc(window.db, 'menu', 'delDia');
+    
+    const menuDelDia = {
+      fecha: getFechaActual(),
+      menu: menu
+    };
+    
+    await setDoc(menuRef, menuDelDia);
+    
+    // Actualizar la visualización
+    cargarMenuDelDia();
+    
+    mostrarNotificacion('Menú del día establecido correctamente', 'success');
+  } catch (error) {
+    console.error('Error al establecer menú:', error);
+    mostrarNotificacion('Error al establecer menú', 'error');
   }
 }
 
-function cargarMenuAlumno() {
-  const diaSeleccionado = document.getElementById('diaInscripcion') ? document.getElementById('diaInscripcion').value : 'hoy';
-  actualizarMenuSegunDia(diaSeleccionado);
+async function cargarMenuDelDia() {
+  try {
+    const { doc, getDocs, collection } = window.firestore;
+    const menuSnap = await getDocs(collection(window.db, 'menu'));
+    
+    let menuDelDia = null;
+    menuSnap.forEach(doc => {
+      if (doc.id === 'delDia') {
+        menuDelDia = doc.data();
+      }
+    });
+    
+    const infoMenuDiv = document.getElementById('infoMenuDelDia');
+    const textoMenu = document.getElementById('textoMenuDelDia');
+    
+    if (menuDelDia && menuDelDia.fecha === getFechaActual()) {
+      infoMenuDiv.classList.remove('oculto');
+      textoMenu.textContent = menuDelDia.menu;
+    } else {
+      infoMenuDiv.classList.add('oculto');
+    }
+  } catch (error) {
+    console.error('Error al cargar menú:', error);
+  }
 }
 
-function actualizarMenuSegunDia(dia) {
-  const menuDelDia = JSON.parse(localStorage.getItem('menuDelDia'));
-  const infoMenuDiv = document.getElementById('infoMenuAlumno');
-  const textoMenu = document.getElementById('textoMenuAlumno');
-  const tituloMenu = document.getElementById('tituloMenuAlumno');
-  
-  const fechaComparar = dia === 'hoy' ? getFechaActual() : getFechaMañana();
-  const textoTitulo = dia === 'hoy' ? 'HOY' : 'MAÑANA';
-  
-  if (menuDelDia && menuDelDia.fecha === fechaComparar) {
-    infoMenuDiv.classList.remove('oculto');
-    textoMenu.textContent = menuDelDia.menu;
-    tituloMenu.textContent = `🍽️ Menú de ${textoTitulo}:`;
-  } else {
-    infoMenuDiv.classList.add('oculto');
+async function cargarMenuAlumno() {
+  const diaSeleccionado = document.getElementById('diaInscripcion') ? document.getElementById('diaInscripcion').value : 'hoy';
+  await actualizarMenuSegunDia(diaSeleccionado);
+}
+
+async function actualizarMenuSegunDia(dia) {
+  try {
+    const { getDocs, collection } = window.firestore;
+    const menuSnap = await getDocs(collection(window.db, 'menu'));
+    
+    let menuDelDia = null;
+    menuSnap.forEach(doc => {
+      if (doc.id === 'delDia') {
+        menuDelDia = doc.data();
+      }
+    });
+    
+    const infoMenuDiv = document.getElementById('infoMenuAlumno');
+    const textoMenu = document.getElementById('textoMenuAlumno');
+    const tituloMenu = document.getElementById('tituloMenuAlumno');
+    
+    const fechaComparar = dia === 'hoy' ? getFechaActual() : getFechaMañana();
+    const textoTitulo = dia === 'hoy' ? 'HOY' : 'MAÑANA';
+    
+    if (menuDelDia && menuDelDia.fecha === fechaComparar) {
+      infoMenuDiv.classList.remove('oculto');
+      textoMenu.textContent = menuDelDia.menu;
+      tituloMenu.textContent = `🍽️ Menú de ${textoTitulo}:`;
+    } else {
+      infoMenuDiv.classList.add('oculto');
+    }
+  } catch (error) {
+    console.error('Error al actualizar menú:', error);
   }
 }
 
@@ -308,7 +403,7 @@ function cambiarDiaInscripcion() {
   actualizarMenuSegunDia(dia);
 }
 
-function inscribirComedor() {
+async function inscribirComedor() {
   if (!usuarioActual) return;
   
   // Verificar si el alumno está bloqueado
@@ -322,176 +417,219 @@ function inscribirComedor() {
   const fechaInscripcion = diaSeleccionado === 'hoy' ? getFechaActual() : getFechaMañana();
   const textoFecha = diaSeleccionado === 'hoy' ? 'HOY' : 'MAÑANA';
   
-  console.log('Día seleccionado:', diaSeleccionado);
-  console.log('Fecha de inscripción:', fechaInscripcion);
-  
-  // Verificar si hay menú establecido para el día seleccionado
-  const menuGuardado = JSON.parse(localStorage.getItem('menuDelDia'));
-  console.log('Menú guardado:', menuGuardado);
-  
-  const hayMenu = menuGuardado && menuGuardado.fecha === fechaInscripcion;
-  console.log('¿Hay menú para el día seleccionado?', hayMenu);
-  
-  // Si no hay menú, preguntar al alumno
-  if (!hayMenu) {
-    const confirmar = confirm(
-      '⚠️ AVISO IMPORTANTE\n\n' +
-      `Aún no se ha establecido el menú para ${textoFecha}.\n\n` +
-      '¿Estás seguro/a que querés anotarte igual?\n\n' +
-      'Recordá que podés cancelar tu inscripción más tarde si cambias de opinión.'
-    );
+  try {
+    // Verificar si hay menú establecido para el día seleccionado
+    const { getDocs, collection, query, where, addDoc } = window.firestore;
+    const menuSnap = await getDocs(collection(window.db, 'menu'));
     
-    if (!confirmar) {
-      return; // El alumno canceló la inscripción
+    let menuGuardado = null;
+    menuSnap.forEach(doc => {
+      if (doc.id === 'delDia') {
+        menuGuardado = doc.data();
+      }
+    });
+    
+    const hayMenu = menuGuardado && menuGuardado.fecha === fechaInscripcion;
+    
+    // Si no hay menú, preguntar al alumno
+    if (!hayMenu) {
+      const confirmar = confirm(
+        '⚠️ AVISO IMPORTANTE\n\n' +
+        `Aún no se ha establecido el menú para ${textoFecha}.\n\n` +
+        '¿Estás seguro/a que querés anotarte igual?\n\n' +
+        'Recordá que podés cancelar tu inscripción más tarde si cambias de opinión.'
+      );
+      
+      if (!confirmar) {
+        return;
+      }
     }
+    
+    // Verificar si ya está inscrito para ese día
+    const inscripcionesRef = collection(window.db, 'inscripciones');
+    const q = query(inscripcionesRef, 
+      where('usuario', '==', usuarioActual.usuario), 
+      where('fecha', '==', fechaInscripcion)
+    );
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty) {
+      mostrarNotificacion(`Ya estás inscrito al comedor para ${textoFecha}`, 'warning');
+      return;
+    }
+    
+    // Registrar la inscripción
+    await addDoc(inscripcionesRef, {
+      usuario: usuarioActual.usuario,
+      nombre: usuarioActual.nombre,
+      cursoDivision: usuarioActual.cursoDivision,
+      fecha: fechaInscripcion,
+      hora: hora,
+      presente: null
+    });
+    
+    // Actualizar la interfaz
+    verificarInscripcionComedor();
+    
+    mostrarNotificacion(`¡Listo! Te anotaste al comedor de ${textoFecha} para las ${hora}`, 'success');
+  } catch (error) {
+    console.error('Error al inscribir:', error);
+    mostrarNotificacion('Error al inscribirse', 'error');
   }
-  
-  const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-  
-  // Verificar si ya está inscrito para ese día
-  const yaInscrito = inscripciones.find(i => 
-    i.usuario === usuarioActual.usuario && i.fecha === fechaInscripcion
-  );
-  
-  if (yaInscrito) {
-    mostrarNotificacion(`Ya estás inscrito al comedor para ${textoFecha}`, 'warning');
-    return;
-  }
-  
-  // Registrar la inscripción
-  inscripciones.push({
-    usuario: usuarioActual.usuario,
-    nombre: usuarioActual.nombre,
-    cursoDivision: usuarioActual.cursoDivision,
-    fecha: fechaInscripcion,
-    hora: hora,
-    presente: null // Se marcará luego por el admin
-  });
-  
-  localStorage.setItem('inscripcionesComedor', JSON.stringify(inscripciones));
-  
-  // Actualizar la interfaz
-  verificarInscripcionComedor();
-  
-  mostrarNotificacion(`¡Listo! Te anotaste al comedor de ${textoFecha} para las ${hora}`, 'success');
 }
 
-function verificarInscripcionComedor() {
+async function verificarInscripcionComedor() {
   if (!usuarioActual) return;
   
-  const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-  
-  // Buscar inscripción para hoy o mañana
-  const fechaHoy = getFechaActual();
-  const fechaMañana = getFechaMañana();
-  
-  const inscripcionHoy = inscripciones.find(i => 
-    i.usuario === usuarioActual.usuario && i.fecha === fechaHoy
-  );
-  
-  const inscripcionMañana = inscripciones.find(i => 
-    i.usuario === usuarioActual.usuario && i.fecha === fechaMañana
-  );
-  
-  const inscripcionDiv = document.getElementById('inscripcionComedor');
-  const infoInscripcionDiv = document.getElementById('infoInscripcionComedor');
-  const horaInscritaSpan = document.getElementById('horaInscrita');
-  const diaInscritoSpan = document.getElementById('diaInscrito');
-  
-  // Mostrar la inscripción más próxima
-  let inscripcionActiva = inscripcionHoy || inscripcionMañana;
-  
-  if (inscripcionActiva) {
-    inscripcionDiv.classList.add('oculto');
-    infoInscripcionDiv.classList.remove('oculto');
-    horaInscritaSpan.textContent = inscripcionActiva.hora;
-    diaInscritoSpan.textContent = inscripcionHoy ? 'HOY' : 'MAÑANA';
-  } else {
-    inscripcionDiv.classList.remove('oculto');
-    infoInscripcionDiv.classList.add('oculto');
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const inscripcionesRef = collection(window.db, 'inscripciones');
+    
+    const fechaHoy = getFechaActual();
+    const fechaMañana = getFechaMañana();
+    
+    // Buscar inscripciones para hoy y mañana
+    const qHoy = query(inscripcionesRef, 
+      where('usuario', '==', usuarioActual.usuario), 
+      where('fecha', '==', fechaHoy)
+    );
+    const qMañana = query(inscripcionesRef, 
+      where('usuario', '==', usuarioActual.usuario), 
+      where('fecha', '==', fechaMañana)
+    );
+    
+    const snapshotHoy = await getDocs(qHoy);
+    const snapshotMañana = await getDocs(qMañana);
+    
+    let inscripcionHoy = null;
+    let inscripcionMañana = null;
+    
+    snapshotHoy.forEach(doc => {
+      inscripcionHoy = { id: doc.id, ...doc.data() };
+    });
+    
+    snapshotMañana.forEach(doc => {
+      inscripcionMañana = { id: doc.id, ...doc.data() };
+    });
+    
+    const inscripcionDiv = document.getElementById('inscripcionComedor');
+    const infoInscripcionDiv = document.getElementById('infoInscripcionComedor');
+    const horaInscritaSpan = document.getElementById('horaInscrita');
+    const diaInscritoSpan = document.getElementById('diaInscrito');
+    
+    // Mostrar la inscripción más próxima
+    let inscripcionActiva = inscripcionHoy || inscripcionMañana;
+    
+    if (inscripcionActiva) {
+      inscripcionDiv.classList.add('oculto');
+      infoInscripcionDiv.classList.remove('oculto');
+      horaInscritaSpan.textContent = inscripcionActiva.hora;
+      diaInscritoSpan.textContent = inscripcionHoy ? 'HOY' : 'MAÑANA';
+    } else {
+      inscripcionDiv.classList.remove('oculto');
+      infoInscripcionDiv.classList.add('oculto');
+    }
+  } catch (error) {
+    console.error('Error al verificar inscripción:', error);
   }
 }
 
-function cargarInscripcionesComedor() {
-  const fechaActual = getFechaActual();
-  const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-  const inscripcionesHoy = inscripciones.filter(i => i.fecha === fechaActual);
-  
-  const listaInscripciones = document.getElementById('listaInscripcionesComedor');
-  
-  if (inscripcionesHoy.length === 0) {
-    listaInscripciones.innerHTML = '<p>No hay inscripciones para hoy</p>';
-    return;
+async function cargarInscripcionesComedor() {
+  try {
+    const fechaActual = getFechaActual();
+    const { collection, getDocs, query, where } = window.firestore;
+    const inscripcionesRef = collection(window.db, 'inscripciones');
+    const q = query(inscripcionesRef, where('fecha', '==', fechaActual));
+    const snapshot = await getDocs(q);
+    
+    const inscripcionesHoy = [];
+    snapshot.forEach(doc => {
+      inscripcionesHoy.push({ id: doc.id, ...doc.data() });
+    });
+    
+    const listaInscripciones = document.getElementById('listaInscripcionesComedor');
+    
+    if (inscripcionesHoy.length === 0) {
+      listaInscripciones.innerHTML = '<p>No hay inscripciones para hoy</p>';
+      return;
+    }
+    
+    let html = '<div class="comedor-list">';
+    inscripcionesHoy.forEach(inscripcion => {
+      const estado = inscripcion.presente === null ? 'Pendiente' : 
+                    (inscripcion.presente ? 'Presente' : 'Ausente');
+      
+      const badgeClass = inscripcion.presente === null ? '' : 
+                        (inscripcion.presente ? 'presente-badge' : 'ausente-badge');
+      
+      html += `
+        <div class="comedor-item">
+          <div>
+            <strong>${inscripcion.nombre}</strong> 
+            <div>${inscripcion.cursoDivision || 'Sin curso'} - ${inscripcion.hora}</div>
+            <span class="status-badge ${badgeClass}">${estado}</span>
+          </div>
+          <div class="comedor-actions">
+            ${inscripcion.presente === null ? `
+              <button class="btn-success" onclick="marcarAsistenciaComedor('${inscripcion.id}', '${inscripcion.usuario}', true)">Presente</button>
+              <button class="btn-danger" onclick="marcarAsistenciaComedor('${inscripcion.id}', '${inscripcion.usuario}', false)">Falta</button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    });
+    html += '</div>';
+    
+    listaInscripciones.innerHTML = html;
+  } catch (error) {
+    console.error('Error al cargar inscripciones:', error);
   }
-  
-  let html = '<div class="comedor-list">';
-  inscripcionesHoy.forEach(inscripcion => {
-    const estado = inscripcion.presente === null ? 'Pendiente' : 
-                  (inscripcion.presente ? 'Presente' : 'Ausente');
-    
-    const badgeClass = inscripcion.presente === null ? '' : 
-                      (inscripcion.presente ? 'presente-badge' : 'ausente-badge');
-    
-    html += `
-      <div class="comedor-item">
-        <div>
-          <strong>${inscripcion.nombre}</strong> 
-          <div>${inscripcion.cursoDivision || 'Sin curso'} - ${inscripcion.hora}</div>
-          <span class="status-badge ${badgeClass}">${estado}</span>
-        </div>
-        <div class="comedor-actions">
-          ${inscripcion.presente === null ? `
-            <button class="btn-success" onclick="marcarAsistenciaComedor('${inscripcion.usuario}', true)">Presente</button>
-            <button class="btn-danger" onclick="marcarAsistenciaComedor('${inscripcion.usuario}', false)">Falta</button>
-          ` : ''}
-        </div>
-      </div>
-    `;
-  });
-  html += '</div>';
-  
-  listaInscripciones.innerHTML = html;
 }
 
-function marcarAsistenciaComedor(usuario, presente) {
-  const fechaActual = getFechaActual();
-  const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-  const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-  
-  // Encontrar y actualizar la inscripción
-  const inscripcionIndex = inscripciones.findIndex(i => 
-    i.usuario === usuario && i.fecha === fechaActual
-  );
-  
-  if (inscripcionIndex !== -1) {
-    inscripciones[inscripcionIndex].presente = presente;
-    localStorage.setItem('inscripcionesComedor', JSON.stringify(inscripciones));
+async function marcarAsistenciaComedor(inscripcionId, usuario, presente) {
+  try {
+    const { doc, updateDoc, getDocs, collection, query, where, setDoc, addDoc } = window.firestore;
+    
+    // Actualizar la inscripción
+    const inscripcionRef = doc(window.db, 'inscripciones', inscripcionId);
+    await updateDoc(inscripcionRef, { presente: presente });
     
     // Si el alumno falta, agregar un strike
     if (!presente) {
-      const usuarioIndex = usuarios.findIndex(u => u.usuario === usuario);
-      if (usuarioIndex !== -1) {
-        usuarios[usuarioIndex].strikes = (usuarios[usuarioIndex].strikes || 0) + 1;
-        const strikesActuales = usuarios[usuarioIndex].strikes;
+      const usuariosRef = collection(window.db, 'usuarios');
+      const usuarioRef = doc(window.db, 'usuarios', usuario);
+      const q = query(usuariosRef, where('usuario', '==', usuario));
+      const snapshot = await getDocs(q);
+      
+      if (!snapshot.empty) {
+        let alumno = null;
+        snapshot.forEach(doc => {
+          alumno = { id: doc.id, ...doc.data() };
+        });
+        
+        const strikesActuales = (alumno.strikes || 0) + 1;
+        
+        // Actualizar strikes
+        await updateDoc(usuarioRef, { strikes: strikesActuales });
         
         // Si llega a 3 strikes y no se ha notificado antes
-        if (strikesActuales >= 3 && !usuarios[usuarioIndex].notificadoStrikes) {
-          enviarNotificacionTutores(usuarios[usuarioIndex]);
-          usuarios[usuarioIndex].notificadoStrikes = true;
-          usuarios[usuarioIndex].bloqueado = true; // Bloquear al alumno
-          mostrarNotificacion(`${usuarios[usuarioIndex].nombre} ha sido bloqueado del comedor`, 'warning');
+        if (strikesActuales >= 3 && !alumno.notificadoStrikes) {
+          await enviarNotificacionTutores(alumno);
+          await updateDoc(usuarioRef, { 
+            notificadoStrikes: true,
+            bloqueado: true
+          });
+          mostrarNotificacion(`${alumno.nombre} ha sido bloqueado del comedor`, 'warning');
         }
-        
-        localStorage.setItem('usuarios', JSON.stringify(usuarios));
         
         // Si es el usuario actual, actualizar la interfaz
         if (usuarioActual && usuarioActual.usuario === usuario) {
-          usuarioActual.strikes = usuarios[usuarioIndex].strikes;
+          usuarioActual.strikes = strikesActuales;
           verificarStrikes();
         }
       }
     } else {
-      // Si el alumno está presente, no agregar strike pero actualizar la interfaz si es el usuario actual
+      // Si el alumno está presente, actualizar la interfaz si es el usuario actual
       if (usuarioActual && usuarioActual.usuario === usuario) {
         verificarStrikes();
       }
@@ -500,7 +638,10 @@ function marcarAsistenciaComedor(usuario, presente) {
     // Recargar la lista y estadísticas
     cargarInscripcionesComedor();
     cargarEstadisticasDia();
-    cargarListaAlumnos(); // Actualizar la lista de alumnos con los strikes actualizados
+    cargarListaAlumnos();
+  } catch (error) {
+    console.error('Error al marcar asistencia:', error);
+    mostrarNotificacion('Error al marcar asistencia', 'error');
   }
 }
 
@@ -538,57 +679,105 @@ function verificarStrikes() {
 }
 
 // Función para cancelar inscripción al comedor
-function cancelarInscripcionComedor() {
+async function cancelarInscripcionComedor() {
   if (!usuarioActual) return;
   
-  const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-  
-  // Buscar inscripción activa (hoy o mañana)
-  const fechaHoy = getFechaActual();
-  const fechaMañana = getFechaMañana();
-  
-  let inscripcionIndex = inscripciones.findIndex(i => 
-    i.usuario === usuarioActual.usuario && (i.fecha === fechaHoy || i.fecha === fechaMañana)
-  );
-  
-  if (inscripcionIndex !== -1) {
-    const diaTexto = inscripciones[inscripcionIndex].fecha === fechaHoy ? 'hoy' : 'mañana';
+  try {
+    const { collection, getDocs, query, where, deleteDoc, doc } = window.firestore;
+    const inscripcionesRef = collection(window.db, 'inscripciones');
     
-    // Eliminar la inscripción
-    inscripciones.splice(inscripcionIndex, 1);
-    localStorage.setItem('inscripcionesComedor', JSON.stringify(inscripciones));
+    const fechaHoy = getFechaActual();
+    const fechaMañana = getFechaMañana();
     
-    // Actualizar la interfaz
-    verificarInscripcionComedor();
+    // Buscar inscripción activa
+    const qHoy = query(inscripcionesRef, 
+      where('usuario', '==', usuarioActual.usuario), 
+      where('fecha', '==', fechaHoy)
+    );
+    const qMañana = query(inscripcionesRef, 
+      where('usuario', '==', usuarioActual.usuario), 
+      where('fecha', '==', fechaMañana)
+    );
     
-    mostrarNotificacion(`Inscripción cancelada. Ya no estás anotado/a para ${diaTexto}.`, 'success');
+    const snapshotHoy = await getDocs(qHoy);
+    const snapshotMañana = await getDocs(qMañana);
+    
+    let inscripcionId = null;
+    let diaTexto = '';
+    
+    if (!snapshotHoy.empty) {
+      snapshotHoy.forEach(doc => {
+        inscripcionId = doc.id;
+      });
+      diaTexto = 'hoy';
+    } else if (!snapshotMañana.empty) {
+      snapshotMañana.forEach(doc => {
+        inscripcionId = doc.id;
+      });
+      diaTexto = 'mañana';
+    }
+    
+    if (inscripcionId) {
+      const inscripcionRef = doc(window.db, 'inscripciones', inscripcionId);
+      await deleteDoc(inscripcionRef);
+      
+      // Actualizar la interfaz
+      verificarInscripcionComedor();
+      
+      mostrarNotificacion(`Inscripción cancelada. Ya no estás anotado/a para ${diaTexto}.`, 'success');
+    }
+  } catch (error) {
+    console.error('Error al cancelar inscripción:', error);
+    mostrarNotificacion('Error al cancelar inscripción', 'error');
   }
 }
 
 // Función para filtrar alumnos por texto
-function filtrarAlumnos() {
+async function filtrarAlumnos() {
   const busqueda = document.getElementById('buscarAlumno').value.toLowerCase();
-  // Siempre obtener datos frescos desde localStorage
-  const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-  const alumnos = usuarios.filter(u => u.tipo === 'alumno');
   
-  // Actualizar la variable global con datos frescos
-  alumnosFiltrados = alumnos.filter(alumno => 
-    alumno.nombre.toLowerCase().includes(busqueda) || 
-    alumno.usuario.toLowerCase().includes(busqueda) ||
-    (alumno.cursoDivision && alumno.cursoDivision.toLowerCase().includes(busqueda))
-  );
-  
-  aplicarFiltroStrikes();
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    const alumnos = [];
+    snapshot.forEach(doc => {
+      alumnos.push({ id: doc.id, ...doc.data() });
+    });
+    
+    alumnosFiltrados = alumnos.filter(alumno => 
+      alumno.nombre.toLowerCase().includes(busqueda) || 
+      alumno.usuario.toLowerCase().includes(busqueda) ||
+      (alumno.cursoDivision && alumno.cursoDivision.toLowerCase().includes(busqueda))
+    );
+    
+    aplicarFiltroStrikes();
+  } catch (error) {
+    console.error('Error al filtrar alumnos:', error);
+  }
 }
 
 // Función para filtrar por strikes
-function filtrarPorStrikes(tipo) {
+async function filtrarPorStrikes(tipo) {
   filtroActual = tipo;
-  // Recargar datos frescos antes de filtrar
-  const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-  alumnosFiltrados = usuarios.filter(u => u.tipo === 'alumno');
-  aplicarFiltroStrikes();
+  
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    alumnosFiltrados = [];
+    snapshot.forEach(doc => {
+      alumnosFiltrados.push({ id: doc.id, ...doc.data() });
+    });
+    
+    aplicarFiltroStrikes();
+  } catch (error) {
+    console.error('Error al filtrar por strikes:', error);
+  }
 }
 
 // Aplicar filtro de strikes
@@ -646,66 +835,100 @@ function mostrarAlumnosFiltrados(alumnos) {
 }
 
 // Función para resetear strikes de un alumno
-function resetearStrikes(usuario) {
+async function resetearStrikes(usuario) {
   if (confirm('¿Estás seguro de que quieres resetear las faltas de este alumno?')) {
-    const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-    const usuarioIndex = usuarios.findIndex(u => u.usuario === usuario);
-    
-    if (usuarioIndex !== -1) {
-      usuarios[usuarioIndex].strikes = 0;
-      usuarios[usuarioIndex].notificadoStrikes = false; // Resetear también el estado de notificación
-      usuarios[usuarioIndex].bloqueado = false; // Desbloquear al alumno
-      localStorage.setItem('usuarios', JSON.stringify(usuarios));
+    try {
+      const { doc, updateDoc } = window.firestore;
+      const usuarioRef = doc(window.db, 'usuarios', usuario);
+      
+      await updateDoc(usuarioRef, {
+        strikes: 0,
+        notificadoStrikes: false,
+        bloqueado: false
+      });
       
       // Actualizar la lista
       filtrarAlumnos();
       mostrarNotificacion('Faltas del alumno reseteadas correctamente', 'success');
+    } catch (error) {
+      console.error('Error al resetear strikes:', error);
+      mostrarNotificacion('Error al resetear faltas', 'error');
     }
   }
 }
 
 // Función para validar alumno (desbloquear después de respuesta de tutores)
-function validarAlumno(usuario) {
+async function validarAlumno(usuario) {
   if (confirm('¿Has recibido la confirmación de los tutores para validar a este alumno?')) {
-    const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-    const usuarioIndex = usuarios.findIndex(u => u.usuario === usuario);
-    
-    if (usuarioIndex !== -1) {
-      usuarios[usuarioIndex].bloqueado = false;
-      usuarios[usuarioIndex].strikes = 0; // Resetear strikes al validar
-      usuarios[usuarioIndex].notificadoStrikes = false;
-      localStorage.setItem('usuarios', JSON.stringify(usuarios));
+    try {
+      const { doc, updateDoc, getDocs, collection, query, where } = window.firestore;
+      const usuarioRef = doc(window.db, 'usuarios', usuario);
+      
+      await updateDoc(usuarioRef, {
+        bloqueado: false,
+        strikes: 0,
+        notificadoStrikes: false
+      });
+      
+      // Obtener nombre del alumno
+      const usuariosRef = collection(window.db, 'usuarios');
+      const q = query(usuariosRef, where('usuario', '==', usuario));
+      const snapshot = await getDocs(q);
+      
+      let nombreAlumno = '';
+      snapshot.forEach(doc => {
+        nombreAlumno = doc.data().nombre;
+      });
       
       // Actualizar la lista
       filtrarAlumnos();
-      mostrarNotificacion(`${usuarios[usuarioIndex].nombre} ha sido validado y desbloqueado correctamente`, 'success');
+      mostrarNotificacion(`${nombreAlumno} ha sido validado y desbloqueado correctamente`, 'success');
+    } catch (error) {
+      console.error('Error al validar alumno:', error);
+      mostrarNotificacion('Error al validar alumno', 'error');
     }
   }
 }
 
 // Función para eliminar un alumno
-function eliminarAlumno(usuario) {
+async function eliminarAlumno(usuario) {
   if (confirm('¿Estás seguro de que quieres eliminar este alumno? Esta acción no se puede deshacer.')) {
-    const usuarios = JSON.parse(localStorage.getItem('usuarios'));
-    const usuarioIndex = usuarios.findIndex(u => u.usuario === usuario);
-    
-    if (usuarioIndex !== -1) {
-      const nombreAlumno = usuarios[usuarioIndex].nombre;
+    try {
+      const { doc, deleteDoc, getDocs, collection, query, where } = window.firestore;
+      
+      // Obtener el nombre antes de eliminar
+      const usuariosRef = collection(window.db, 'usuarios');
+      const q = query(usuariosRef, where('usuario', '==', usuario));
+      const snapshot = await getDocs(q);
+      
+      let nombreAlumno = '';
+      snapshot.forEach(doc => {
+        nombreAlumno = doc.data().nombre;
+      });
       
       // Eliminar el usuario
-      usuarios.splice(usuarioIndex, 1);
-      localStorage.setItem('usuarios', JSON.stringify(usuarios));
+      const usuarioRef = doc(window.db, 'usuarios', usuario);
+      await deleteDoc(usuarioRef);
       
       // También eliminar sus inscripciones al comedor
-      const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-      const inscripcionesFiltradas = inscripciones.filter(i => i.usuario !== usuario);
-      localStorage.setItem('inscripcionesComedor', JSON.stringify(inscripcionesFiltradas));
+      const inscripcionesRef = collection(window.db, 'inscripciones');
+      const qInscripciones = query(inscripcionesRef, where('usuario', '==', usuario));
+      const inscripcionesSnap = await getDocs(qInscripciones);
+      
+      const deletePromises = [];
+      inscripcionesSnap.forEach(doc => {
+        deletePromises.push(deleteDoc(doc.ref));
+      });
+      await Promise.all(deletePromises);
       
       // Actualizar la lista
       filtrarAlumnos();
       cargarInscripcionesComedor();
       cargarEstadisticasDia();
       mostrarNotificacion(`${nombreAlumno} ha sido eliminado del sistema`, 'success');
+    } catch (error) {
+      console.error('Error al eliminar alumno:', error);
+      mostrarNotificacion('Error al eliminar alumno', 'error');
     }
   }
 }
@@ -742,129 +965,153 @@ function mostrarNotificacion(mensaje, tipo = 'success') {
 }
 
 // Función para enviar notificación a tutores
-function enviarNotificacionTutores(alumno) {
-  // En un sistema real, aquí se enviaría un email real
-  // Por ahora, lo simularemos guardando la notificación en localStorage
-  
-  const notificaciones = JSON.parse(localStorage.getItem('notificacionesEnviadas') || '[]');
-  
-  const nuevaNotificacion = {
-    fecha: new Date().toISOString(),
-    alumno: alumno.nombre,
-    usuario: alumno.usuario,
-    emailTutores: alumno.emailTutores,
-    strikes: alumno.strikes,
-    mensaje: `Estimados padres/tutores de ${alumno.nombre}: Les informamos que su hijo/a ha acumulado ${alumno.strikes} faltas en el comedor escolar. Por favor, comuníquese con la institución para más información.`
-  };
-  
-  notificaciones.push(nuevaNotificacion);
-  localStorage.setItem('notificacionesEnviadas', JSON.stringify(notificaciones));
-  
-  // Mostrar notificación al administrador
-  console.log('📧 Notificación enviada a:', alumno.emailTutores);
-  console.log('Mensaje:', nuevaNotificacion.mensaje);
-  
-  // En un sistema real, aquí se haría la llamada a la API de email
-  // Ejemplo: fetch('/api/enviar-email', { method: 'POST', body: JSON.stringify(nuevaNotificacion) })
-  
-  mostrarNotificacion(`Notificación enviada a tutores de ${alumno.nombre}`, 'success');
+async function enviarNotificacionTutores(alumno) {
+  try {
+    const { collection, addDoc } = window.firestore;
+    const notificacionesRef = collection(window.db, 'notificaciones');
+    
+    const nuevaNotificacion = {
+      fecha: new Date().toISOString(),
+      alumno: alumno.nombre,
+      usuario: alumno.usuario,
+      emailTutores: alumno.emailTutores,
+      strikes: alumno.strikes,
+      mensaje: `Estimados padres/tutores de ${alumno.nombre}: Les informamos que su hijo/a ha acumulado ${alumno.strikes} faltas en el comedor escolar. Por favor, comuníquese con la institución para más información.`
+    };
+    
+    await addDoc(notificacionesRef, nuevaNotificacion);
+    
+    console.log('📧 Notificación enviada a:', alumno.emailTutores);
+    console.log('Mensaje:', nuevaNotificacion.mensaje);
+    
+    mostrarNotificacion(`Notificación enviada a tutores de ${alumno.nombre}`, 'success');
+  } catch (error) {
+    console.error('Error al enviar notificación:', error);
+  }
 }
 
 // Función para cargar estadísticas del día
-function cargarEstadisticasDia() {
-  const fechaActual = getFechaActual();
-  const inscripciones = JSON.parse(localStorage.getItem('inscripcionesComedor'));
-  const inscripcionesHoy = inscripciones.filter(i => i.fecha === fechaActual);
-  
-  const presentes = inscripcionesHoy.filter(i => i.presente === true).length;
-  const ausentes = inscripcionesHoy.filter(i => i.presente === false).length;
-  const pendientes = inscripcionesHoy.filter(i => i.presente === null).length;
-  const total = inscripcionesHoy.length;
-  
-  const estadisticasDiv = document.getElementById('estadisticasDia');
-  
-  let html = `
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
-      <div class="stats-card">
-        <div class="stats-number">${total}</div>
-        <div class="stats-label">Total Inscritos</div>
-      </div>
-      <div class="stats-card" style="background: linear-gradient(135deg, var(--success), #3a9fc9);">
-        <div class="stats-number">${presentes}</div>
-        <div class="stats-label">Presentes</div>
-      </div>
-      <div class="stats-card" style="background: linear-gradient(135deg, var(--danger), #c41a6b);">
-        <div class="stats-number">${ausentes}</div>
-        <div class="stats-label">Ausentes</div>
-      </div>
-      <div class="stats-card" style="background: linear-gradient(135deg, var(--warning), #cc7f00);">
-        <div class="stats-number">${pendientes}</div>
-        <div class="stats-label">Pendientes</div>
-      </div>
-    </div>
-  `;
-  
-  estadisticasDiv.innerHTML = html;
-}
-
-// Función para cargar notificaciones enviadas
-function cargarNotificaciones() {
-  const notificaciones = JSON.parse(localStorage.getItem('notificacionesEnviadas') || '[]');
-  const listaNotificaciones = document.getElementById('listaNotificaciones');
-  
-  if (notificaciones.length === 0) {
-    listaNotificaciones.innerHTML = '<p>No se han enviado notificaciones</p>';
-    return;
-  }
-  
-  // Ordenar por fecha más reciente
-  notificaciones.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-  
-  let html = '<div class="comedor-list">';
-  notificaciones.forEach(notif => {
-    const fecha = new Date(notif.fecha);
-    const fechaFormateada = fecha.toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+async function cargarEstadisticasDia() {
+  try {
+    const fechaActual = getFechaActual();
+    const { collection, getDocs, query, where } = window.firestore;
+    const inscripcionesRef = collection(window.db, 'inscripciones');
+    const q = query(inscripcionesRef, where('fecha', '==', fechaActual));
+    const snapshot = await getDocs(q);
+    
+    const inscripcionesHoy = [];
+    snapshot.forEach(doc => {
+      inscripcionesHoy.push(doc.data());
     });
     
-    html += `
-      <div class="comedor-item" style="flex-direction: column; align-items: flex-start;">
-        <div style="width: 100%;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <strong>📧 ${notif.alumno}</strong>
-            <span class="status-badge ausente-badge">${notif.strikes} faltas</span>
-          </div>
-          <div style="font-size: 14px; color: #666; margin-bottom: 5px;">
-            <strong>Email:</strong> ${notif.emailTutores}
-          </div>
-          <div style="font-size: 14px; color: #666; margin-bottom: 5px;">
-            <strong>Fecha:</strong> ${fechaFormateada}
-          </div>
-          <div style="background-color: #f8f9fa; padding: 10px; border-radius: 6px; margin-top: 8px; font-size: 14px;">
-            ${notif.mensaje}
-          </div>
+    const presentes = inscripcionesHoy.filter(i => i.presente === true).length;
+    const ausentes = inscripcionesHoy.filter(i => i.presente === false).length;
+    const pendientes = inscripcionesHoy.filter(i => i.presente === null).length;
+    const total = inscripcionesHoy.length;
+    
+    const estadisticasDiv = document.getElementById('estadisticasDia');
+    
+    let html = `
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+        <div class="stats-card">
+          <div class="stats-number">${total}</div>
+          <div class="stats-label">Total Inscritos</div>
+        </div>
+        <div class="stats-card" style="background: linear-gradient(135deg, var(--success), #3a9fc9);">
+          <div class="stats-number">${presentes}</div>
+          <div class="stats-label">Presentes</div>
+        </div>
+        <div class="stats-card" style="background: linear-gradient(135deg, var(--danger), #c41a6b);">
+          <div class="stats-number">${ausentes}</div>
+          <div class="stats-label">Ausentes</div>
+        </div>
+        <div class="stats-card" style="background: linear-gradient(135deg, var(--warning), #cc7f00);">
+          <div class="stats-number">${pendientes}</div>
+          <div class="stats-label">Pendientes</div>
         </div>
       </div>
     `;
-  });
-  html += '</div>';
-  
-  listaNotificaciones.innerHTML = html;
+    
+    estadisticasDiv.innerHTML = html;
+  } catch (error) {
+    console.error('Error al cargar estadísticas:', error);
+  }
+}
+
+// Función para cargar notificaciones enviadas
+async function cargarNotificaciones() {
+  try {
+    const { collection, getDocs } = window.firestore;
+    const notificacionesRef = collection(window.db, 'notificaciones');
+    const snapshot = await getDocs(notificacionesRef);
+    
+    const notificaciones = [];
+    snapshot.forEach(doc => {
+      notificaciones.push({ id: doc.id, ...doc.data() });
+    });
+    
+    const listaNotificaciones = document.getElementById('listaNotificaciones');
+    
+    if (notificaciones.length === 0) {
+      listaNotificaciones.innerHTML = '<p>No se han enviado notificaciones</p>';
+      return;
+    }
+    
+    // Ordenar por fecha más reciente
+    notificaciones.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+    
+    let html = '<div class="comedor-list">';
+    notificaciones.forEach(notif => {
+      const fecha = new Date(notif.fecha);
+      const fechaFormateada = fecha.toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      html += `
+        <div class="comedor-item" style="flex-direction: column; align-items: flex-start;">
+          <div style="width: 100%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <strong>📧 ${notif.alumno}</strong>
+              <span class="status-badge ausente-badge">${notif.strikes} faltas</span>
+            </div>
+            <div style="font-size: 14px; color: #666; margin-bottom: 5px;">
+              <strong>Email:</strong> ${notif.emailTutores}
+            </div>
+            <div style="font-size: 14px; color: #666; margin-bottom: 5px;">
+              <strong>Fecha:</strong> ${fechaFormateada}
+            </div>
+            <div style="background-color: #f8f9fa; padding: 10px; border-radius: 6px; margin-top: 8px; font-size: 14px;">
+              ${notif.mensaje}
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    html += '</div>';
+    
+    listaNotificaciones.innerHTML = html;
+  } catch (error) {
+    console.error('Error al cargar notificaciones:', error);
+  }
 }
 
 // Función para cargar configuración de horarios
-function cargarConfiguracionHorarios() {
-  const config = JSON.parse(localStorage.getItem('configuracionHorarios'));
-  document.getElementById('horaLimiteInscripcion').value = config.horaLimiteInscripcion;
-  document.getElementById('horaLimiteCancelacion').value = config.horaLimiteCancelacion;
+async function cargarConfiguracionHorarios() {
+  try {
+    const config = await obtenerConfiguracion();
+    document.getElementById('horaLimiteInscripcion').value = config.horaLimiteInscripcion;
+    document.getElementById('horaLimiteCancelacion').value = config.horaLimiteCancelacion;
+  } catch (error) {
+    console.error('Error al cargar configuración de horarios:', error);
+  }
 }
 
 // Función para guardar configuración de horarios
-function guardarConfiguracionHorarios() {
+async function guardarConfiguracionHorarios() {
   const horaInscripcion = document.getElementById('horaLimiteInscripcion').value;
   const horaCancelacion = document.getElementById('horaLimiteCancelacion').value;
   
@@ -878,11 +1125,19 @@ function guardarConfiguracionHorarios() {
     return;
   }
   
-  const config = {
-    horaLimiteInscripcion: horaInscripcion,
-    horaLimiteCancelacion: horaCancelacion
-  };
-  
-  localStorage.setItem('configuracionHorarios', JSON.stringify(config));
-  mostrarNotificacion('Configuración de horarios guardada correctamente', 'success');
+  try {
+    const { doc, setDoc } = window.firestore;
+    const configRef = doc(window.db, 'configuracion', 'horarios');
+    
+    const config = {
+      horaLimiteInscripcion: horaInscripcion,
+      horaLimiteCancelacion: horaCancelacion
+    };
+    
+    await setDoc(configRef, config);
+    mostrarNotificacion('Configuración de horarios guardada correctamente', 'success');
+  } catch (error) {
+    console.error('Error al guardar configuración:', error);
+    mostrarNotificacion('Error al guardar configuración', 'error');
+  }
 }
