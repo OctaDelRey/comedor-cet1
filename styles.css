@@ -397,6 +397,10 @@ li {
   border-left: 4px solid var(--warning);
 }
 
+.notification.info {
+  border-left: 4px solid var(--primary);
+}
+
 .loading {
   display: inline-block;
   width: 20px;
