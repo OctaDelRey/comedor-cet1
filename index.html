@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sistema de Asistencia y Comedor</title>
   <link rel="stylesheet" href="styles.css">
+  <!-- SheetJS para leer archivos Excel -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -47,6 +49,25 @@
             <button class="btn-primary" onclick="toggleFormularioRegistro()">
               <span id="btnTextoRegistro">➕ Registrar Alumno</span>
             </button>
+            <button class="btn-success" onclick="toggleImportarExcel()">
+              <span id="btnTextoExcel">📊 Importar desde Excel</span>
+            </button>
+          </div>
+          
+          <div id="formularioImportarExcel" class="oculto" style="margin-top: 20px;">
+            <h3>Importar Alumnos desde Excel</h3>
+            <div class="form-group">
+              <input type="file" id="archivoExcel" accept=".xlsx,.xls" onchange="procesarArchivoExcel(event)">
+              <small style="color: #666;">Seleccione el archivo Excel con los datos de los alumnos</small>
+            </div>
+            <div id="vistaPreviaExcel" class="oculto" style="margin-top: 15px;">
+              <h4>Vista Previa de Datos:</h4>
+              <div id="tablaPreviewExcel" style="overflow-x: auto; max-height: 300px; margin: 10px 0;"></div>
+              <div class="button-group">
+                <button class="btn-success" onclick="importarAlumnosDesdeExcel()">✓ Importar Alumnos</button>
+                <button class="btn-secondary" onclick="cancelarImportacionExcel()">✕ Cancelar</button>
+              </div>
+            </div>
           </div>
           
           <div id="formularioRegistro" class="oculto" style="margin-top: 20px;">
@@ -64,27 +85,29 @@
               <input type="email" id="emailTutores" placeholder="Email de padres/tutores">
             </div>
             <div class="form-group">
-              <label for="cursoAlumno">Curso:</label>
-              <select id="cursoAlumno" onchange="actualizarDivisiones()">
-                <option value="">Seleccionar curso...</option>
-                <optgroup label="Ciclo Básico (CB)">
-                  <option value="CB 1ro">1ro</option>
-                  <option value="CB 2do">2do</option>
-                </optgroup>
-                <optgroup label="Ciclo Superior">
-                  <option value="1ro">1ro</option>
-                  <option value="2do">2do</option>
-                  <option value="3ro">3ro</option>
-                  <option value="4to">4to</option>
-                </optgroup>
+              <label for="cicloAlumno">Ciclo:</label>
+              <select id="cicloAlumno" onchange="actualizarCursos()">
+                <option value="">Seleccionar ciclo...</option>
+                <option value="CB">Ciclo Básico (CB)</option>
+                <option value="CS">Ciclo Superior (CS)</option>
               </select>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="cursoGroup" style="display: none;">
+              <label for="cursoAlumno">Curso:</label>
+              <select id="cursoAlumno" onchange="actualizarOrientacionYDivisiones()">
+                <option value="">Seleccionar curso...</option>
+              </select>
+            </div>
+            <div class="form-group" id="orientacionGroup" style="display: none;">
+              <label for="orientacionAlumno">Orientación:</label>
+              <select id="orientacionAlumno" onchange="actualizarDivisiones()">
+                <option value="">Seleccionar orientación...</option>
+              </select>
+            </div>
+            <div class="form-group" id="divisionGroup" style="display: none;">
               <label for="divisionAlumno">División:</label>
               <select id="divisionAlumno">
                 <option value="">Seleccionar división...</option>
-                <option value="1ra">1ra</option>
-                <option value="2da">2da</option>
               </select>
             </div>
             <div class="button-group">
@@ -149,9 +172,21 @@
             <button class="btn-secondary" onclick="filtrarPorStrikes('todos')">Todos</button>
             <button class="btn-warning" onclick="filtrarPorStrikes('con-strikes')">Con Faltas</button>
             <button class="btn-success" onclick="filtrarPorStrikes('sin-strikes')">Sin Faltas</button>
+            <button class="btn-primary" onclick="exportarAlumnosAExcel()">📥 Exportar a Excel</button>
           </div>
           
           <div id="listaAlumnos"></div>
+        </div>
+
+        <div class="card" style="border: 2px solid var(--danger);">
+          <h3 style="color: var(--danger);">⚠️ Zona de Peligro</h3>
+          <p style="color: #666; margin-bottom: 15px;">Acciones destructivas que no se pueden deshacer</p>
+          <button class="btn-danger" onclick="depurarTodosAlumnos()" style="width: 100%;">
+            🗑️ Eliminar TODOS los Alumnos
+          </button>
+          <small style="color: #666; display: block; margin-top: 10px;">
+            Esta acción eliminará todos los alumnos de la base de datos. Se requiere doble confirmación.
+          </small>
         </div>
 
         <div class="button-group">
@@ -180,6 +215,35 @@
           <div id="strikesInfo" class="strikes-info oculto">
             <span class="strike-icon">⚠️</span>
             <span id="strikesMessage"></span>
+          </div>
+          
+          <div class="button-group" style="margin-top: 15px;">
+            <button class="btn-primary" onclick="toggleModificarCuenta()" id="btnModificarCuenta">
+              🔧 Modificar Mi Cuenta
+            </button>
+          </div>
+          
+          <div id="formularioModificarCuenta" class="oculto" style="margin-top: 15px;">
+            <h4>Modificar Usuario y Contraseña</h4>
+            <div class="alert alert-warning" id="alertaModificacionCuenta">
+              ⚠️ Solo podrás modificar tus credenciales UNA vez. Usa esta opción con cuidado.
+            </div>
+            <div class="form-group">
+              <label for="nuevoUsuario">Nuevo Usuario:</label>
+              <input type="text" id="nuevoUsuario" placeholder="Ingrese nuevo usuario">
+            </div>
+            <div class="form-group">
+              <label for="nuevaContraseña">Nueva Contraseña:</label>
+              <input type="password" id="nuevaContraseña" placeholder="Ingrese nueva contraseña">
+            </div>
+            <div class="form-group">
+              <label for="confirmarContraseña">Confirmar Contraseña:</label>
+              <input type="password" id="confirmarContraseña" placeholder="Confirme la nueva contraseña">
+            </div>
+            <div class="button-group">
+              <button class="btn-success" onclick="guardarModificacionCuenta()">✓ Guardar Cambios</button>
+              <button class="btn-secondary" onclick="cancelarModificacionCuenta()">✕ Cancelar</button>
+            </div>
           </div>
         </div>
 
@@ -234,7 +298,7 @@
   <script type="module">
     // Import the functions you need from the SDKs you need
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+    import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, onSnapshot, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     // Your web app's Firebase configuration
     const firebaseConfig = {
@@ -252,7 +316,7 @@
 
     // Hacer disponible globalmente
     window.db = db;
-    window.firestore = { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, onSnapshot, setDoc };
+    window.firestore = { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, onSnapshot, setDoc, getDoc };
   </script>
   <script src="script.js"></script>
 </body>
