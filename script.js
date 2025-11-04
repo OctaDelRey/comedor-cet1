@@ -2,6 +2,7 @@
 let usuarioActual = null;
 let alumnosFiltrados = [];
 let filtroActual = 'todos';
+let datosExcelImportados = null; // Para almacenar datos del Excel antes de importar
 
 // Esperar a que Firebase esté listo
 window.addEventListener('load', async () => {
@@ -50,8 +51,13 @@ function toggleFormularioRegistro() {
     document.getElementById('usuarioAlumno').value = '';
     document.getElementById('contraseñaAlumno').value = '';
     document.getElementById('emailTutores').value = '';
-    document.getElementById('cursoAlumno').value = '';
-    document.getElementById('divisionAlumno').value = '';
+    document.getElementById('cicloAlumno').value = '';
+    document.getElementById('cursoAlumno').innerHTML = '<option value="">Seleccionar curso...</option>';
+    document.getElementById('orientacionAlumno').innerHTML = '<option value="">Seleccionar orientación...</option>';
+    document.getElementById('divisionAlumno').innerHTML = '<option value="">Seleccionar división...</option>';
+    document.getElementById('cursoGroup').style.display = 'none';
+    document.getElementById('orientacionGroup').style.display = 'none';
+    document.getElementById('divisionGroup').style.display = 'none';
   }
 }
 
@@ -80,6 +86,23 @@ function getHoraActual() {
   const horas = String(ahora.getHours()).padStart(2, '0');
   const minutos = String(ahora.getMinutes()).padStart(2, '0');
   return `${horas}:${minutos}`;
+}
+
+// Función para verificar si ya pasaron los horarios de almuerzo del día
+// El último horario es 13:00, así que después de las 13:00 no se puede inscribir
+function hanPasadoHorariosAlmuerzo() {
+  const horaActual = getHoraActual();
+  // El último horario de almuerzo es 13:00, así que después de las 13:30 no se puede inscribir
+  // (damos 30 minutos de margen después del último horario)
+  return horaActual >= '13:30';
+}
+
+// Función para verificar si se puede inscribir hoy
+function puedeInscribirseHoy() {
+  if (hanPasadoHorariosAlmuerzo()) {
+    return false;
+  }
+  return true;
 }
 
 // Función para comparar si la hora actual es menor que una hora límite
@@ -144,7 +167,7 @@ async function login() {
   }
   
   try {
-    const { collection, getDocs, query, where } = window.firestore;
+    const { collection, getDocs, query, where, doc, getDoc } = window.firestore;
     const usuariosRef = collection(window.db, 'usuarios');
     const q = query(usuariosRef, where('usuario', '==', usuario), where('contraseña', '==', contraseña));
     const snapshot = await getDocs(q);
@@ -153,6 +176,13 @@ async function login() {
       snapshot.forEach((doc) => {
         usuarioActual = { id: doc.id, ...doc.data() };
       });
+      
+      // Recargar datos completos del usuario para asegurar que tenemos la información más reciente
+      const usuarioRef = doc(window.db, 'usuarios', usuarioActual.usuario);
+      const usuarioSnap = await getDoc(usuarioRef);
+      if (usuarioSnap.exists()) {
+        usuarioActual = { id: usuarioSnap.id, ...usuarioSnap.data() };
+      }
       
       console.log('Usuario encontrado:', usuarioActual);
       
@@ -173,6 +203,8 @@ async function login() {
         document.getElementById('alumnoNombre').textContent = usuarioActual.nombre;
         document.getElementById('alumnoCurso').textContent = usuarioActual.cursoDivision || 'No especificado';
         
+        // Verificar si ya modificó sus credenciales
+        verificarEstadoModificacionCuenta();
         verificarStrikes();
         cargarMenuAlumno();
         verificarInscripcionComedor();
@@ -262,17 +294,122 @@ async function registrarAlumno() {
   }
 }
 
-// Función para actualizar divisiones disponibles según el curso
-function actualizarDivisiones() {
-  const curso = document.getElementById('cursoAlumno').value;
-  const divisionSelect = document.getElementById('divisionAlumno');
+// Función para actualizar cursos disponibles según el ciclo
+function actualizarCursos() {
+  const ciclo = document.getElementById('cicloAlumno').value;
+  const cursoSelect = document.getElementById('cursoAlumno');
+  const cursoGroup = document.getElementById('cursoGroup');
+  const orientacionGroup = document.getElementById('orientacionGroup');
+  const divisionGroup = document.getElementById('divisionGroup');
   
-  // Todas las divisiones tienen 1ra y 2da
-  divisionSelect.innerHTML = `
-    <option value="">Seleccionar división...</option>
-    <option value="1ra">1ra</option>
-    <option value="2da">2da</option>
-  `;
+  // Limpiar campos dependientes
+  cursoSelect.innerHTML = '<option value="">Seleccionar curso...</option>';
+  document.getElementById('orientacionAlumno').innerHTML = '<option value="">Seleccionar orientación...</option>';
+  document.getElementById('divisionAlumno').innerHTML = '<option value="">Seleccionar división...</option>';
+  orientacionGroup.style.display = 'none';
+  divisionGroup.style.display = 'none';
+  
+  if (!ciclo) {
+    cursoGroup.style.display = 'none';
+    return;
+  }
+  
+  cursoGroup.style.display = 'block';
+  
+  if (ciclo === 'CB') {
+    // Ciclo Básico: 1° y 2°
+    cursoSelect.innerHTML = `
+      <option value="">Seleccionar curso...</option>
+      <option value="1">1°</option>
+      <option value="2">2°</option>
+    `;
+  } else if (ciclo === 'CS') {
+    // Ciclo Superior: 1° a 4°
+    cursoSelect.innerHTML = `
+      <option value="">Seleccionar curso...</option>
+      <option value="1">1°</option>
+      <option value="2">2°</option>
+      <option value="3">3°</option>
+      <option value="4">4°</option>
+    `;
+  }
+}
+
+// Función para actualizar orientación según el curso (solo CS)
+function actualizarOrientacionYDivisiones() {
+  const ciclo = document.getElementById('cicloAlumno').value;
+  const curso = document.getElementById('cursoAlumno').value;
+  const orientacionSelect = document.getElementById('orientacionAlumno');
+  const orientacionGroup = document.getElementById('orientacionGroup');
+  const divisionGroup = document.getElementById('divisionGroup');
+  
+  // Limpiar campos dependientes
+  orientacionSelect.innerHTML = '<option value="">Seleccionar orientación...</option>';
+  document.getElementById('divisionAlumno').innerHTML = '<option value="">Seleccionar división...</option>';
+  divisionGroup.style.display = 'none';
+  
+  if (ciclo === 'CB') {
+    // CB no tiene orientación
+    orientacionGroup.style.display = 'none';
+    actualizarDivisiones();
+    return;
+  }
+  
+  if (ciclo === 'CS' && curso) {
+    // CS tiene orientaciones
+    orientacionGroup.style.display = 'block';
+    orientacionSelect.innerHTML = `
+      <option value="">Seleccionar orientación...</option>
+      <option value="INF">Informática (INF)</option>
+      <option value="MEC">Mecánica (MEC)</option>
+    `;
+  } else {
+    orientacionGroup.style.display = 'none';
+  }
+}
+
+// Función para actualizar divisiones disponibles según el curso, ciclo y orientación
+function actualizarDivisiones() {
+  const ciclo = document.getElementById('cicloAlumno').value;
+  const curso = document.getElementById('cursoAlumno').value;
+  const orientacion = document.getElementById('orientacionAlumno').value;
+  const divisionSelect = document.getElementById('divisionAlumno');
+  const divisionGroup = document.getElementById('divisionGroup');
+  
+  if (!ciclo || !curso) {
+    divisionGroup.style.display = 'none';
+    return;
+  }
+  
+  divisionGroup.style.display = 'block';
+  
+  if (ciclo === 'CB') {
+    // CB: hasta 4 divisiones
+    divisionSelect.innerHTML = `
+      <option value="">Seleccionar división...</option>
+      <option value="1">1°</option>
+      <option value="2">2°</option>
+      <option value="3">3°</option>
+      <option value="4">4°</option>
+    `;
+  } else if (ciclo === 'CS') {
+    if (curso === '1') {
+      // 1° CS: 3 divisiones (INF y MEC)
+      divisionSelect.innerHTML = `
+        <option value="">Seleccionar división...</option>
+        <option value="1">1°</option>
+        <option value="2">2°</option>
+        <option value="3">3°</option>
+      `;
+    } else {
+      // 2°, 3°, 4° CS: 2 divisiones (INF y MEC)
+      divisionSelect.innerHTML = `
+        <option value="">Seleccionar división...</option>
+        <option value="1">1°</option>
+        <option value="2">2°</option>
+      `;
+    }
+  }
 }
 
 async function cargarListaAlumnos() {
@@ -313,6 +450,19 @@ async function establecerMenuDelDia() {
   if (!menu) {
     mostrarNotificacion('Por favor ingrese el menú del día', 'warning');
     return;
+  }
+  
+  // Validar que no haya pasado el horario de almuerzo
+  if (hanPasadoHorariosAlmuerzo()) {
+    const confirmar = confirm(
+      '⚠️ AVISO\n\n' +
+      'Ya pasaron los horarios de almuerzo del día de hoy.\n\n' +
+      '¿Estás seguro de que quieres establecer el menú para hoy de todas formas?'
+    );
+    
+    if (!confirmar) {
+      return;
+    }
   }
   
   try {
@@ -418,8 +568,33 @@ async function inscribirComedor() {
   const textoFecha = diaSeleccionado === 'hoy' ? 'HOY' : 'MAÑANA';
   
   try {
+    // Validar horarios: no permitir inscribirse para hoy si ya pasaron los horarios de almuerzo
+    if (diaSeleccionado === 'hoy' && !puedeInscribirseHoy()) {
+      mostrarNotificacion('Ya pasaron los horarios de almuerzo del día. Solo puedes inscribirte para mañana.', 'warning');
+      return;
+    }
+    
+    // Verificar si ya asistió hoy (si está intentando inscribirse para hoy)
+    if (diaSeleccionado === 'hoy') {
+      const { collection, getDocs, query, where } = window.firestore;
+      const inscripcionesRef = collection(window.db, 'inscripciones');
+      const qHoy = query(inscripcionesRef, 
+        where('usuario', '==', usuarioActual.usuario), 
+        where('fecha', '==', getFechaActual())
+      );
+      const snapshotHoy = await getDocs(qHoy);
+      
+      snapshotHoy.forEach(doc => {
+        const inscripcion = doc.data();
+        if (inscripcion.presente === true) {
+          mostrarNotificacion('Ya asististe al comedor hoy. Solo puedes inscribirte para mañana.', 'warning');
+          return;
+        }
+      });
+    }
+    
     // Verificar si hay menú establecido para el día seleccionado
-    const { getDocs, collection, query, where, addDoc } = window.firestore;
+    const { getDocs, collection, query, where, addDoc, doc, updateDoc } = window.firestore;
     const menuSnap = await getDocs(collection(window.db, 'menu'));
     
     let menuGuardado = null;
@@ -454,18 +629,34 @@ async function inscribirComedor() {
     const snapshot = await getDocs(q);
     
     if (!snapshot.empty) {
-      mostrarNotificacion(`Ya estás inscrito al comedor para ${textoFecha}`, 'warning');
+      // Si ya existe, actualizar el horario
+      snapshot.forEach(async (docSnap) => {
+        const inscripcionExistente = docSnap.data();
+        if (inscripcionExistente.presente === null) {
+          // Solo actualizar si aún no se marcó asistencia
+          const inscripcionRef = doc(window.db, 'inscripciones', docSnap.id);
+          await updateDoc(inscripcionRef, { 
+            hora: hora,
+            fechaActualizacion: new Date().toISOString()
+          });
+          mostrarNotificacion(`Horario actualizado para ${textoFecha} a las ${hora}`, 'success');
+        } else {
+          mostrarNotificacion(`Ya estás inscrito al comedor para ${textoFecha} y tu asistencia ya fue registrada`, 'warning');
+        }
+      });
+      verificarInscripcionComedor();
       return;
     }
     
-    // Registrar la inscripción
+    // Registrar la inscripción con horario individual
     await addDoc(inscripcionesRef, {
       usuario: usuarioActual.usuario,
       nombre: usuarioActual.nombre,
       cursoDivision: usuarioActual.cursoDivision,
       fecha: fechaInscripcion,
       hora: hora,
-      presente: null
+      presente: null,
+      fechaInscripcion: new Date().toISOString()
     });
     
     // Actualizar la interfaz
@@ -517,35 +708,227 @@ async function verificarInscripcionComedor() {
     const horaInscritaSpan = document.getElementById('horaInscrita');
     const diaInscritoSpan = document.getElementById('diaInscrito');
     
-    // Mostrar la inscripción más próxima
-    let inscripcionActiva = inscripcionHoy || inscripcionMañana;
-    
-    if (inscripcionActiva) {
+    // Si hay inscripción para hoy
+    if (inscripcionHoy) {
+      // Si ya fue marcado como presente, ocultar la inscripción (ya asistió hoy)
+      // El alumno solo podrá inscribirse al día siguiente
+      if (inscripcionHoy.presente === true) {
+        inscripcionDiv.classList.remove('oculto');
+        infoInscripcionDiv.classList.add('oculto');
+        // Mostrar mensaje indicando que ya asistió hoy
+        const mensajeAsistencia = document.createElement('div');
+        mensajeAsistencia.className = 'alert alert-success';
+        mensajeAsistencia.innerHTML = '✅ Ya asististe al comedor hoy. Puedes inscribirte nuevamente mañana.';
+        mensajeAsistencia.id = 'mensajeAsistenciaHoy';
+        
+        // Remover mensaje anterior si existe
+        const mensajeAnterior = document.getElementById('mensajeAsistenciaHoy');
+        if (mensajeAnterior) {
+          mensajeAnterior.remove();
+        }
+        
+        // Insertar mensaje después del título del comedor
+        const comedorSection = document.querySelector('.comedor-section');
+        if (comedorSection && !document.getElementById('mensajeAsistenciaHoy')) {
+          const tituloComedor = comedorSection.querySelector('h3');
+          if (tituloComedor && tituloComedor.nextSibling) {
+            comedorSection.insertBefore(mensajeAsistencia, tituloComedor.nextSibling);
+          } else {
+            comedorSection.appendChild(mensajeAsistencia);
+          }
+        }
+        
+        // Cambiar el selector de día para que solo muestre mañana
+        const diaSelect = document.getElementById('diaInscripcion');
+        if (diaSelect) {
+          diaSelect.innerHTML = '<option value="mañana">Mañana</option>';
+        }
+      } else if (inscripcionHoy.presente === false) {
+        // Si fue marcado como ausente, mostrar la inscripción pero con mensaje
+        inscripcionDiv.classList.add('oculto');
+        infoInscripcionDiv.classList.remove('oculto');
+        horaInscritaSpan.textContent = inscripcionHoy.hora;
+        diaInscritoSpan.textContent = 'HOY';
+      } else {
+        // Pendiente (aún no se marcó asistencia)
+        inscripcionDiv.classList.add('oculto');
+        infoInscripcionDiv.classList.remove('oculto');
+        horaInscritaSpan.textContent = inscripcionHoy.hora;
+        diaInscritoSpan.textContent = 'HOY';
+      }
+    } else if (inscripcionMañana) {
+      // Si hay inscripción para mañana pero no para hoy
       inscripcionDiv.classList.add('oculto');
       infoInscripcionDiv.classList.remove('oculto');
-      horaInscritaSpan.textContent = inscripcionActiva.hora;
-      diaInscritoSpan.textContent = inscripcionHoy ? 'HOY' : 'MAÑANA';
+      horaInscritaSpan.textContent = inscripcionMañana.hora;
+      diaInscritoSpan.textContent = 'MAÑANA';
     } else {
+      // No hay inscripciones
       inscripcionDiv.classList.remove('oculto');
       infoInscripcionDiv.classList.add('oculto');
+      
+      // Remover mensaje de asistencia si existe
+      const mensajeAsistencia = document.getElementById('mensajeAsistenciaHoy');
+      if (mensajeAsistencia) {
+        mensajeAsistencia.remove();
+      }
+      
+      // Restaurar selector de día pero deshabilitar "hoy" si ya pasaron los horarios
+      const diaSelect = document.getElementById('diaInscripcion');
+      if (diaSelect) {
+        if (hanPasadoHorariosAlmuerzo()) {
+          // Si ya pasaron los horarios, solo mostrar mañana
+          diaSelect.innerHTML = '<option value="mañana">Mañana</option>';
+          // Mostrar mensaje informativo
+          const mensajeHorario = document.createElement('div');
+          mensajeHorario.className = 'alert alert-warning';
+          mensajeHorario.innerHTML = '⏰ Ya pasaron los horarios de almuerzo del día. Solo puedes inscribirte para mañana.';
+          mensajeHorario.id = 'mensajeHorarioPasado';
+          
+          const mensajeAnterior = document.getElementById('mensajeHorarioPasado');
+          if (mensajeAnterior) {
+            mensajeAnterior.remove();
+          }
+          
+          const comedorSection = document.querySelector('.comedor-section');
+          if (comedorSection && !document.getElementById('mensajeHorarioPasado')) {
+            const tituloComedor = comedorSection.querySelector('h3');
+            if (tituloComedor && tituloComedor.nextSibling) {
+              comedorSection.insertBefore(mensajeHorario, tituloComedor.nextSibling);
+            } else {
+              comedorSection.appendChild(mensajeHorario);
+            }
+          }
+        } else {
+          diaSelect.innerHTML = `
+            <option value="hoy">Hoy</option>
+            <option value="mañana">Mañana</option>
+          `;
+          // Remover mensaje de horario pasado si existe
+          const mensajeHorario = document.getElementById('mensajeHorarioPasado');
+          if (mensajeHorario) {
+            mensajeHorario.remove();
+          }
+        }
+      }
     }
   } catch (error) {
     console.error('Error al verificar inscripción:', error);
   }
 }
 
+// Función auxiliar para obtener clave de agrupación
+function obtenerClaveGrupo(alumno) {
+  const ciclo = alumno.ciclo || '';
+  const curso = alumno.curso || '';
+  const orientacion = alumno.orientacion || '';
+  const division = alumno.division || '';
+  
+  if (ciclo === 'CB') {
+    return `CB-${curso}-${division}`;
+  } else if (ciclo === 'CS') {
+    return `CS-${curso}-${orientacion}-${division}`;
+  }
+  
+  // Fallback: usar cursoDivision si está disponible
+  return alumno.cursoDivision || 'Sin curso';
+}
+
+// Función auxiliar para obtener nombre de grupo (formato corto para dropdown)
+// Formato: "1° 2° CB" o "2° 1° CS INF"
+function obtenerNombreGrupo(alumno) {
+  const ciclo = alumno.ciclo || '';
+  const curso = alumno.curso || '';
+  const orientacion = alumno.orientacion || '';
+  const division = alumno.division || '';
+  
+  if (ciclo === 'CB') {
+    return `${curso}° ${division}° CB`;
+  } else if (ciclo === 'CS') {
+    return `${curso}° ${division}° CS ${orientacion}`;
+  }
+  
+  return alumno.cursoDivision || 'Sin curso';
+}
+
+// Función auxiliar para obtener nombre completo de grupo
+function obtenerNombreGrupoCompleto(alumno) {
+  const ciclo = alumno.ciclo || '';
+  const curso = alumno.curso || '';
+  const orientacion = alumno.orientacion || '';
+  const division = alumno.division || '';
+  
+  if (ciclo === 'CB') {
+    return `Ciclo Básico ${curso}° - División ${division}°`;
+  } else if (ciclo === 'CS') {
+    return `Ciclo Superior ${curso}° ${orientacion} - División ${division}°`;
+  }
+  
+  return alumno.cursoDivision || 'Sin curso';
+}
+
+// Función para ordenar grupos
+function ordenarGrupos(grupos) {
+  const orden = {
+    'CB': 1,
+    'CS': 2
+  };
+  
+  return Object.keys(grupos).sort((a, b) => {
+    const [cicloA, cursoA] = a.split('-');
+    const [cicloB, cursoB] = b.split('-');
+    
+    if (orden[cicloA] !== orden[cicloB]) {
+      return orden[cicloA] - orden[cicloB];
+    }
+    
+    if (cursoA !== cursoB) {
+      return parseInt(cursoA) - parseInt(cursoB);
+    }
+    
+    // Si es CS, ordenar por orientación
+    if (cicloA === 'CS') {
+      const orientA = a.split('-')[2];
+      const orientB = b.split('-')[2];
+      if (orientA !== orientB) {
+        return orientA.localeCompare(orientB);
+      }
+    }
+    
+    // Ordenar por división
+    const divA = a.split('-').pop();
+    const divB = b.split('-').pop();
+    return parseInt(divA) - parseInt(divB);
+  });
+}
+
 async function cargarInscripcionesComedor() {
   try {
     const fechaActual = getFechaActual();
-    const { collection, getDocs, query, where } = window.firestore;
+    const { collection, getDocs, query, where, doc, getDoc } = window.firestore;
     const inscripcionesRef = collection(window.db, 'inscripciones');
     const q = query(inscripcionesRef, where('fecha', '==', fechaActual));
     const snapshot = await getDocs(q);
     
     const inscripcionesHoy = [];
-    snapshot.forEach(doc => {
-      inscripcionesHoy.push({ id: doc.id, ...doc.data() });
-    });
+    for (const docSnap of snapshot.docs) {
+      const inscripcion = { id: docSnap.id, ...docSnap.data() };
+      
+      // Obtener datos completos del usuario si no están en la inscripción
+      if (!inscripcion.ciclo && inscripcion.usuario) {
+        const usuarioRef = doc(window.db, 'usuarios', inscripcion.usuario);
+        const usuarioSnap = await getDoc(usuarioRef);
+        if (usuarioSnap.exists()) {
+          const usuarioData = usuarioSnap.data();
+          inscripcion.ciclo = usuarioData.ciclo || '';
+          inscripcion.curso = usuarioData.curso || '';
+          inscripcion.orientacion = usuarioData.orientacion || '';
+          inscripcion.division = usuarioData.division || '';
+        }
+      }
+      
+      inscripcionesHoy.push(inscripcion);
+    }
     
     const listaInscripciones = document.getElementById('listaInscripcionesComedor');
     
@@ -554,31 +937,74 @@ async function cargarInscripcionesComedor() {
       return;
     }
     
-    let html = '<div class="comedor-list">';
+    // Agrupar por curso/división
+    const grupos = {};
     inscripcionesHoy.forEach(inscripcion => {
-      const estado = inscripcion.presente === null ? 'Pendiente' : 
-                    (inscripcion.presente ? 'Presente' : 'Ausente');
-      
-      const badgeClass = inscripcion.presente === null ? '' : 
-                        (inscripcion.presente ? 'presente-badge' : 'ausente-badge');
+      const clave = obtenerClaveGrupo(inscripcion);
+      if (!grupos[clave]) {
+        grupos[clave] = [];
+      }
+      grupos[clave].push(inscripcion);
+    });
+    
+    // Ordenar grupos
+    const gruposOrdenados = ordenarGrupos(grupos);
+    
+    let html = '';
+    let grupoIndex = 0;
+    gruposOrdenados.forEach(claveGrupo => {
+      const inscripcionesGrupo = grupos[claveGrupo];
+      const nombreGrupo = obtenerNombreGrupo(inscripcionesGrupo[0]);
+      const nombreGrupoCompleto = obtenerNombreGrupoCompleto(inscripcionesGrupo[0]);
+      const grupoId = `grupo-inscripcion-${grupoIndex}`;
       
       html += `
-        <div class="comedor-item">
-          <div>
-            <strong>${inscripcion.nombre}</strong> 
-            <div>${inscripcion.cursoDivision || 'Sin curso'} - ${inscripcion.hora}</div>
-            <span class="status-badge ${badgeClass}">${estado}</span>
+        <div style="margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
+          <button 
+            class="btn-secondary" 
+            style="width: 100%; text-align: left; padding: 12px 15px; background: #f0f0f0; border: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
+            onclick="toggleGrupo('${grupoId}')"
+            type="button"
+          >
+            <span style="font-weight: bold; color: var(--primary);">
+              📚 ${nombreGrupo} 
+              <span style="color: #666; font-weight: normal;">(${inscripcionesGrupo.length} ${inscripcionesGrupo.length === 1 ? 'inscripción' : 'inscripciones'})</span>
+            </span>
+            <span id="${grupoId}-icon" style="font-size: 18px;">▼</span>
+          </button>
+          <div id="${grupoId}" class="comedor-list" style="display: none; padding: 10px; background: white;">
+      `;
+      
+      inscripcionesGrupo.forEach(inscripcion => {
+        const estado = inscripcion.presente === null ? 'Pendiente' : 
+                      (inscripcion.presente ? 'Presente' : 'Ausente');
+        
+        const badgeClass = inscripcion.presente === null ? '' : 
+                          (inscripcion.presente ? 'presente-badge' : 'ausente-badge');
+        
+        html += `
+          <div class="comedor-item">
+            <div>
+              <strong>${inscripcion.nombre}</strong> 
+              <div>${inscripcion.cursoDivision || 'Sin curso'} - ${inscripcion.hora}</div>
+              <span class="status-badge ${badgeClass}">${estado}</span>
+            </div>
+            <div class="comedor-actions">
+              ${inscripcion.presente === null ? `
+                <button class="btn-success" onclick="marcarAsistenciaComedor('${inscripcion.id}', '${inscripcion.usuario}', true)">Presente</button>
+                <button class="btn-danger" onclick="marcarAsistenciaComedor('${inscripcion.id}', '${inscripcion.usuario}', false)">Falta</button>
+              ` : ''}
+            </div>
           </div>
-          <div class="comedor-actions">
-            ${inscripcion.presente === null ? `
-              <button class="btn-success" onclick="marcarAsistenciaComedor('${inscripcion.id}', '${inscripcion.usuario}', true)">Presente</button>
-              <button class="btn-danger" onclick="marcarAsistenciaComedor('${inscripcion.id}', '${inscripcion.usuario}', false)">Falta</button>
-            ` : ''}
+        `;
+      });
+      
+      html += `
           </div>
         </div>
       `;
+      grupoIndex++;
     });
-    html += '</div>';
     
     listaInscripciones.innerHTML = html;
   } catch (error) {
@@ -586,62 +1012,111 @@ async function cargarInscripcionesComedor() {
   }
 }
 
+// FUNCIÓN REESCRITA COMPLETAMENTE PARA GARANTIZAR FALTAS INDIVIDUALES
 async function marcarAsistenciaComedor(inscripcionId, usuario, presente) {
   try {
-    const { doc, updateDoc, getDocs, collection, query, where, setDoc, addDoc } = window.firestore;
+    const { doc, updateDoc, getDoc } = window.firestore;
     
-    // Actualizar la inscripción
+    // PASO 1: Obtener la inscripción específica por su ID
     const inscripcionRef = doc(window.db, 'inscripciones', inscripcionId);
-    await updateDoc(inscripcionRef, { presente: presente });
+    const inscripcionSnap = await getDoc(inscripcionRef);
     
-    // Si el alumno falta, agregar un strike
+    if (!inscripcionSnap.exists()) {
+      mostrarNotificacion('Error: Inscripción no encontrada', 'error');
+      return;
+    }
+    
+    const datosInscripcion = inscripcionSnap.data();
+    
+    // PASO 2: Validar que el usuario de la inscripción coincida con el parámetro
+    // Esto es CRÍTICO para evitar que se marquen faltas a usuarios incorrectos
+    if (datosInscripcion.usuario !== usuario) {
+      console.error('ERROR CRÍTICO: Usuario de inscripción no coincide');
+      console.error('Usuario esperado:', usuario);
+      console.error('Usuario en inscripción:', datosInscripcion.usuario);
+      mostrarNotificacion('Error: Usuario no coincide. No se aplicará ninguna falta.', 'error');
+      return;
+    }
+    
+    // PASO 3: Actualizar SOLO esta inscripción específica
+    await updateDoc(inscripcionRef, { 
+      presente: presente,
+      fechaMarcado: new Date().toISOString()
+    });
+    
+    // PASO 4: Si el alumno falta, agregar strike SOLO a este usuario específico
     if (!presente) {
-      const usuariosRef = collection(window.db, 'usuarios');
-      const usuarioRef = doc(window.db, 'usuarios', usuario);
-      const q = query(usuariosRef, where('usuario', '==', usuario));
-      const snapshot = await getDocs(q);
+      // Obtener el documento del usuario específico usando el usuario exacto de la inscripción
+      const usuarioRef = doc(window.db, 'usuarios', datosInscripcion.usuario);
+      const usuarioSnap = await getDoc(usuarioRef);
       
-      if (!snapshot.empty) {
-        let alumno = null;
-        snapshot.forEach(doc => {
-          alumno = { id: doc.id, ...doc.data() };
+      if (!usuarioSnap.exists()) {
+        console.error('Usuario no encontrado en base de datos:', datosInscripcion.usuario);
+        mostrarNotificacion('Error: Usuario no encontrado', 'error');
+        return;
+      }
+      
+      // Obtener datos actuales del usuario
+      const datosUsuario = usuarioSnap.data();
+      const strikesActuales = (datosUsuario.strikes || 0) + 1;
+      
+      // Actualizar strikes SOLO en este documento específico
+      await updateDoc(usuarioRef, { 
+        strikes: strikesActuales 
+      });
+      
+      console.log(`Falta aplicada a ${datosUsuario.nombre} (${datosInscripcion.usuario}). Total: ${strikesActuales}`);
+      
+      // Si llega a 3 strikes y no se ha notificado antes
+      if (strikesActuales >= 3 && !datosUsuario.notificadoStrikes) {
+        await enviarNotificacionTutores({
+          ...datosUsuario,
+          strikes: strikesActuales
         });
-        
-        const strikesActuales = (alumno.strikes || 0) + 1;
-        
-        // Actualizar strikes
-        await updateDoc(usuarioRef, { strikes: strikesActuales });
-        
-        // Si llega a 3 strikes y no se ha notificado antes
-        if (strikesActuales >= 3 && !alumno.notificadoStrikes) {
-          await enviarNotificacionTutores(alumno);
-          await updateDoc(usuarioRef, { 
-            notificadoStrikes: true,
-            bloqueado: true
-          });
-          mostrarNotificacion(`${alumno.nombre} ha sido bloqueado del comedor`, 'warning');
-        }
-        
-        // Si es el usuario actual, actualizar la interfaz
-        if (usuarioActual && usuarioActual.usuario === usuario) {
-          usuarioActual.strikes = strikesActuales;
-          verificarStrikes();
-        }
+        await updateDoc(usuarioRef, { 
+          notificadoStrikes: true,
+          bloqueado: true
+        });
+        mostrarNotificacion(`${datosUsuario.nombre} ha sido bloqueado del comedor`, 'warning');
+      }
+      
+      // Si es el usuario actual, actualizar su interfaz
+      if (usuarioActual && usuarioActual.usuario === datosInscripcion.usuario) {
+        usuarioActual.strikes = strikesActuales;
+        verificarStrikes();
       }
     } else {
       // Si el alumno está presente, actualizar la interfaz si es el usuario actual
-      if (usuarioActual && usuarioActual.usuario === usuario) {
+      if (usuarioActual && usuarioActual.usuario === datosInscripcion.usuario) {
         verificarStrikes();
+        setTimeout(() => {
+          verificarInscripcionComedor();
+        }, 500);
       }
     }
     
-    // Recargar la lista y estadísticas
+    // PASO 5: Recargar listas y estadísticas
     cargarInscripcionesComedor();
     cargarEstadisticasDia();
     cargarListaAlumnos();
+    
+    // Si el usuario actual es el que fue marcado, actualizar su vista
+    if (usuarioActual && usuarioActual.usuario === datosInscripcion.usuario && presente) {
+      setTimeout(() => {
+        verificarInscripcionComedor();
+      }, 1000);
+    }
+    
+    mostrarNotificacion(
+      presente ? `Asistencia marcada para ${datosInscripcion.nombre}` : 
+                 `Falta registrada para ${datosInscripcion.nombre}`,
+      presente ? 'success' : 'warning'
+    );
+    
   } catch (error) {
     console.error('Error al marcar asistencia:', error);
-    mostrarNotificacion('Error al marcar asistencia', 'error');
+    console.error('Detalles del error:', error.message);
+    mostrarNotificacion('Error al marcar asistencia: ' + error.message, 'error');
   }
 }
 
@@ -793,7 +1268,7 @@ function aplicarFiltroStrikes() {
   mostrarAlumnosFiltrados(alumnosParaMostrar);
 }
 
-// Mostrar alumnos filtrados
+// Mostrar alumnos filtrados agrupados por curso/división
 function mostrarAlumnosFiltrados(alumnos) {
   const listaAlumnosDiv = document.getElementById('listaAlumnos');
   
@@ -802,34 +1277,77 @@ function mostrarAlumnosFiltrados(alumnos) {
     return;
   }
   
-  let html = '<div class="comedor-list">';
+  // Agrupar por curso/división
+  const grupos = {};
   alumnos.forEach(alumno => {
-    const strikes = alumno.strikes || 0;
-    const strikeClass = strikes > 0 ? 'ausente-badge' : 'presente-badge';
-    const strikeText = strikes > 0 ? `${strikes} falta${strikes > 1 ? 's' : ''}` : 'Sin faltas';
-    
-    const bloqueadoTag = alumno.bloqueado ? '<span class="status-badge ausente-badge" style="background: rgba(255, 0, 0, 0.2); color: #cc0000;">🔒 BLOQUEADO</span>' : '';
+    const clave = obtenerClaveGrupo(alumno);
+    if (!grupos[clave]) {
+      grupos[clave] = [];
+    }
+    grupos[clave].push(alumno);
+  });
+  
+  // Ordenar grupos
+  const gruposOrdenados = ordenarGrupos(grupos);
+  
+  let html = '';
+  let grupoIndex = 0;
+  gruposOrdenados.forEach(claveGrupo => {
+    const alumnosGrupo = grupos[claveGrupo];
+    const nombreGrupo = obtenerNombreGrupo(alumnosGrupo[0]);
+    const nombreGrupoCompleto = obtenerNombreGrupoCompleto(alumnosGrupo[0]);
+    const grupoId = `grupo-alumno-${grupoIndex}`;
     
     html += `
-      <div class="comedor-item">
-        <div>
-          <strong>${alumno.nombre}</strong> ${bloqueadoTag}
-          <div>Usuario: ${alumno.usuario}</div>
-          <div>Curso: ${alumno.cursoDivision || 'No especificado'}</div>
-          <div>Email Tutores: ${alumno.emailTutores || 'No especificado'}</div>
-          <div>Faltas: <span class="status-badge ${strikeClass}">${strikeText}</span></div>
+      <div style="margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
+        <button 
+          class="btn-secondary" 
+          style="width: 100%; text-align: left; padding: 12px 15px; background: #f0f0f0; border: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
+          onclick="toggleGrupo('${grupoId}')"
+          type="button"
+        >
+          <span style="font-weight: bold; color: var(--primary);">
+            📚 ${nombreGrupo} 
+            <span style="color: #666; font-weight: normal;">(${alumnosGrupo.length} ${alumnosGrupo.length === 1 ? 'alumno' : 'alumnos'})</span>
+          </span>
+          <span id="${grupoId}-icon" style="font-size: 18px;">▼</span>
+        </button>
+        <div id="${grupoId}" class="comedor-list" style="display: none; padding: 10px; background: white;">
+    `;
+    
+    alumnosGrupo.forEach(alumno => {
+      const strikes = alumno.strikes || 0;
+      const strikeClass = strikes > 0 ? 'ausente-badge' : 'presente-badge';
+      const strikeText = strikes > 0 ? `${strikes} falta${strikes > 1 ? 's' : ''}` : 'Sin faltas';
+      
+      const bloqueadoTag = alumno.bloqueado ? '<span class="status-badge ausente-badge" style="background: rgba(255, 0, 0, 0.2); color: #cc0000;">🔒 BLOQUEADO</span>' : '';
+      
+      html += `
+        <div class="comedor-item">
+          <div>
+            <strong>${alumno.nombre}</strong> ${bloqueadoTag}
+            <div>Usuario: ${alumno.usuario}</div>
+            <div>Curso: ${alumno.cursoDivision || 'No especificado'}</div>
+            <div>Email Tutores: ${alumno.emailTutores || 'No especificado'}</div>
+            <div>Faltas: <span class="status-badge ${strikeClass}">${strikeText}</span></div>
+          </div>
+          <div class="comedor-actions">
+            ${alumno.bloqueado ? 
+              `<button class="btn-success" onclick="validarAlumno('${alumno.usuario}')">✓ Validar Alumno</button>` : 
+              `<button class="btn-warning" onclick="resetearStrikes('${alumno.usuario}')">↺ Resetear Faltas</button>`
+            }
+            <button class="btn-danger" onclick="eliminarAlumno('${alumno.usuario}')">🗑️ Eliminar</button>
+          </div>
         </div>
-        <div class="comedor-actions">
-          ${alumno.bloqueado ? 
-            `<button class="btn-success" onclick="validarAlumno('${alumno.usuario}')">✓ Validar Alumno</button>` : 
-            `<button class="btn-warning" onclick="resetearStrikes('${alumno.usuario}')">↺ Resetear Faltas</button>`
-          }
-          <button class="btn-danger" onclick="eliminarAlumno('${alumno.usuario}')">🗑️ Eliminar</button>
+      `;
+    });
+    
+    html += `
         </div>
       </div>
     `;
+    grupoIndex++;
   });
-  html += '</div>';
   
   listaAlumnosDiv.innerHTML = html;
 }
@@ -1141,3 +1659,538 @@ async function guardarConfiguracionHorarios() {
     mostrarNotificacion('Error al guardar configuración', 'error');
   }
 }
+
+// ============ FUNCIONES PARA IMPORTAR/EXPORTAR EXCEL ============
+
+// Función para mostrar/ocultar formulario de importación Excel
+function toggleImportarExcel() {
+  const formulario = document.getElementById('formularioImportarExcel');
+  const btnTexto = document.getElementById('btnTextoExcel');
+  
+  if (formulario.classList.contains('oculto')) {
+    formulario.classList.remove('oculto');
+    btnTexto.textContent = '✕ Cerrar Importación';
+  } else {
+    formulario.classList.add('oculto');
+    btnTexto.textContent = '📊 Importar desde Excel';
+    datosExcelImportados = null;
+    document.getElementById('archivoExcel').value = '';
+    document.getElementById('vistaPreviaExcel').classList.add('oculto');
+  }
+}
+
+// Función para procesar archivo Excel
+function procesarArchivoExcel(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      
+      // Leer la primera hoja
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      
+      // Convertir a JSON
+      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+      
+      if (jsonData.length === 0) {
+        mostrarNotificacion('El archivo Excel está vacío', 'error');
+        return;
+      }
+      
+      // Guardar datos para importación
+      datosExcelImportados = jsonData;
+      
+      // Mostrar vista previa
+      mostrarVistaPreviaExcel(jsonData);
+      
+    } catch (error) {
+      console.error('Error al procesar Excel:', error);
+      mostrarNotificacion('Error al procesar el archivo Excel', 'error');
+    }
+  };
+  
+  reader.readAsArrayBuffer(file);
+}
+
+// Función para mostrar vista previa del Excel
+function mostrarVistaPreviaExcel(datos) {
+  const vistaPreviaDiv = document.getElementById('vistaPreviaExcel');
+  const tablaDiv = document.getElementById('tablaPreviewExcel');
+  
+  if (datos.length === 0) {
+    tablaDiv.innerHTML = '<p>No hay datos para mostrar</p>';
+    return;
+  }
+  
+  // Obtener columnas
+  const columnas = Object.keys(datos[0]);
+  
+  let html = '<table style="width: 100%; border-collapse: collapse; font-size: 14px;">';
+  html += '<thead><tr style="background: #f0f0f0;">';
+  columnas.forEach(col => {
+    html += `<th style="padding: 8px; border: 1px solid #ddd; text-align: left;">${col}</th>`;
+  });
+  html += '</tr></thead><tbody>';
+  
+  // Mostrar máximo 10 filas en vista previa
+  datos.slice(0, 10).forEach(fila => {
+    html += '<tr>';
+    columnas.forEach(col => {
+      html += `<td style="padding: 6px; border: 1px solid #ddd;">${fila[col] || ''}</td>`;
+    });
+    html += '</tr>';
+  });
+  
+  html += '</tbody></table>';
+  
+  if (datos.length > 10) {
+    html += `<p style="margin-top: 10px; color: #666;">... y ${datos.length - 10} filas más</p>`;
+  }
+  
+  tablaDiv.innerHTML = html;
+  vistaPreviaDiv.classList.remove('oculto');
+}
+
+// Función para importar alumnos desde Excel
+async function importarAlumnosDesdeExcel() {
+  if (!datosExcelImportados || datosExcelImportados.length === 0) {
+    mostrarNotificacion('No hay datos para importar', 'error');
+    return;
+  }
+  
+  try {
+    const { collection, getDocs, query, where, setDoc, doc } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    
+    let importados = 0;
+    let actualizados = 0;
+    let errores = 0;
+    
+    for (const fila of datosExcelImportados) {
+      try {
+        // Intentar detectar las columnas del Excel (flexible)
+        const nombre = fila['Nombre'] || fila['nombre'] || fila['NOMBRE'] || fila['Nombre Completo'] || '';
+        const dni = fila['DNI'] || fila['dni'] || fila['Cédula'] || fila['cedula'] || '';
+        const email = fila['Email'] || fila['email'] || fila['EMAIL'] || fila['Email Tutores'] || fila['Email de Tutores'] || '';
+        const ciclo = fila['Ciclo'] || fila['ciclo'] || fila['CICLO'] || '';
+        const curso = fila['Curso'] || fila['curso'] || fila['CURSO'] || '';
+        const orientacion = fila['Orientación'] || fila['Orientacion'] || fila['orientación'] || fila['orientacion'] || fila['ORIENTACIÓN'] || fila['ORIENTACION'] || '';
+        const division = fila['División'] || fila['Division'] || fila['división'] || fila['division'] || fila['DIVISIÓN'] || fila['DIVISION'] || fila['Div'] || '';
+        
+        if (!nombre) {
+          errores++;
+          continue;
+        }
+        
+        // Generar usuario y contraseña por defecto
+        // Prioridad: usar DNI si existe, sino usar nombre (sin espacios, minúsculas)
+        const usuarioDefault = dni ? dni.toString() : nombre.toLowerCase().replace(/\s+/g, '');
+        const contraseñaDefault = dni ? dni.toString() : nombre.toLowerCase().replace(/\s+/g, '');
+        
+        // Verificar si el usuario ya existe
+        const q = query(usuariosRef, where('usuario', '==', usuarioDefault));
+        const snapshot = await getDocs(q);
+        
+        // Construir cursoDivision completo
+        let cursoDivision = '';
+        if (ciclo && curso && division) {
+          if (ciclo === 'CB' || ciclo === 'CB ') {
+            cursoDivision = `CB ${curso}° ${division}°`;
+          } else if (ciclo === 'CS' || ciclo === 'CS ') {
+            if (orientacion) {
+              cursoDivision = `CS ${curso}° ${orientacion} ${division}°`;
+            } else {
+              cursoDivision = `CS ${curso}° ${division}°`;
+            }
+          } else {
+            cursoDivision = curso && division ? `${curso} ${division}` : (curso || division || '');
+          }
+        } else {
+          cursoDivision = curso && division ? `${curso} ${division}` : (curso || division || '');
+        }
+        
+        if (snapshot.empty) {
+          // Crear nuevo usuario
+          const nuevoAlumno = {
+            usuario: usuarioDefault,
+            contraseña: contraseñaDefault,
+            tipo: 'alumno',
+            nombre: nombre,
+            cursoDivision: cursoDivision,
+            ciclo: ciclo || '',
+            curso: curso || '',
+            orientacion: (ciclo === 'CS' || ciclo === 'CS ') ? (orientacion || '') : '',
+            division: division || '',
+            emailTutores: email || '',
+            strikes: 0,
+            notificadoStrikes: false,
+            bloqueado: false,
+            credencialesModificadas: false,
+            dni: dni || ''
+          };
+          
+          await setDoc(doc(window.db, 'usuarios', usuarioDefault), nuevoAlumno);
+          importados++;
+        } else {
+          // Actualizar usuario existente
+          const usuarioRef = doc(window.db, 'usuarios', usuarioDefault);
+          await setDoc(usuarioRef, {
+            nombre: nombre,
+            cursoDivision: cursoDivision,
+            ciclo: ciclo || '',
+            curso: curso || '',
+            orientacion: (ciclo === 'CS' || ciclo === 'CS ') ? (orientacion || '') : '',
+            division: division || '',
+            emailTutores: email || '',
+            dni: dni || ''
+          }, { merge: true });
+          actualizados++;
+        }
+      } catch (error) {
+        console.error('Error al importar fila:', error);
+        errores++;
+      }
+    }
+    
+    mostrarNotificacion(
+      `Importación completada: ${importados} nuevos, ${actualizados} actualizados, ${errores} errores`,
+      importados + actualizados > 0 ? 'success' : 'error'
+    );
+    
+    // Limpiar y recargar
+    cancelarImportacionExcel();
+    cargarListaAlumnos();
+    
+  } catch (error) {
+    console.error('Error al importar alumnos:', error);
+    mostrarNotificacion('Error al importar alumnos', 'error');
+  }
+}
+
+// Función para cancelar importación
+function cancelarImportacionExcel() {
+  datosExcelImportados = null;
+  document.getElementById('archivoExcel').value = '';
+  document.getElementById('vistaPreviaExcel').classList.add('oculto');
+  toggleImportarExcel();
+}
+
+// Función para exportar alumnos a Excel
+async function exportarAlumnosAExcel() {
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    const alumnos = [];
+    snapshot.forEach(doc => {
+      alumnos.push(doc.data());
+    });
+    
+    if (alumnos.length === 0) {
+      mostrarNotificacion('No hay alumnos para exportar', 'warning');
+      return;
+    }
+    
+    // Preparar datos para Excel
+    const datosExport = alumnos.map(alumno => ({
+      'Nombre': alumno.nombre || '',
+      'Usuario': alumno.usuario || '',
+      'DNI': alumno.dni || '',
+      'Email Tutores': alumno.emailTutores || '',
+      'Curso y División': alumno.cursoDivision || '',
+      'Faltas': alumno.strikes || 0,
+      'Bloqueado': alumno.bloqueado ? 'Sí' : 'No',
+      'Credenciales Modificadas': alumno.credencialesModificadas ? 'Sí' : 'No'
+    }));
+    
+    // Crear workbook
+    const ws = XLSX.utils.json_to_sheet(datosExport);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Alumnos');
+    
+    // Descargar archivo
+    const fecha = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, `alumnos_${fecha}.xlsx`);
+    
+    mostrarNotificacion('Archivo Excel exportado correctamente', 'success');
+    
+  } catch (error) {
+    console.error('Error al exportar:', error);
+    mostrarNotificacion('Error al exportar a Excel', 'error');
+  }
+}
+
+// ============ FUNCIONES PARA MODIFICAR CUENTA (UNA SOLA VEZ) ============
+
+// Función para verificar estado de modificación de cuenta
+function verificarEstadoModificacionCuenta() {
+  if (!usuarioActual || usuarioActual.tipo !== 'alumno') return;
+  
+  const btnModificar = document.getElementById('btnModificarCuenta');
+  if (usuarioActual.credencialesModificadas) {
+    btnModificar.disabled = true;
+    btnModificar.textContent = '🔒 Credenciales ya modificadas';
+    btnModificar.classList.add('btn-disabled');
+  } else {
+    btnModificar.disabled = false;
+    btnModificar.textContent = '🔧 Modificar Mi Cuenta';
+    btnModificar.classList.remove('btn-disabled');
+  }
+}
+
+// Función para mostrar/ocultar formulario de modificación
+function toggleModificarCuenta() {
+  if (usuarioActual && usuarioActual.credencialesModificadas) {
+    mostrarNotificacion('Ya modificaste tus credenciales. Solo puedes hacerlo una vez.', 'warning');
+    return;
+  }
+  
+  const formulario = document.getElementById('formularioModificarCuenta');
+  if (formulario.classList.contains('oculto')) {
+    formulario.classList.remove('oculto');
+    // Limpiar campos
+    document.getElementById('nuevoUsuario').value = '';
+    document.getElementById('nuevaContraseña').value = '';
+    document.getElementById('confirmarContraseña').value = '';
+  } else {
+    formulario.classList.add('oculto');
+  }
+}
+
+// Función para cancelar modificación
+function cancelarModificacionCuenta() {
+  document.getElementById('formularioModificarCuenta').classList.add('oculto');
+  document.getElementById('nuevoUsuario').value = '';
+  document.getElementById('nuevaContraseña').value = '';
+  document.getElementById('confirmarContraseña').value = '';
+}
+
+// Función para guardar modificación de cuenta
+async function guardarModificacionCuenta() {
+  if (!usuarioActual || usuarioActual.tipo !== 'alumno') return;
+  
+  if (usuarioActual.credencialesModificadas) {
+    mostrarNotificacion('Ya modificaste tus credenciales. Solo puedes hacerlo una vez.', 'error');
+    return;
+  }
+  
+  const nuevoUsuario = document.getElementById('nuevoUsuario').value.trim();
+  const nuevaContraseña = document.getElementById('nuevaContraseña').value;
+  const confirmarContraseña = document.getElementById('confirmarContraseña').value;
+  
+  if (!nuevoUsuario || !nuevaContraseña || !confirmarContraseña) {
+    mostrarNotificacion('Por favor complete todos los campos', 'warning');
+    return;
+  }
+  
+  if (nuevaContraseña !== confirmarContraseña) {
+    mostrarNotificacion('Las contraseñas no coinciden', 'error');
+    return;
+  }
+  
+  if (nuevaContraseña.length < 4) {
+    mostrarNotificacion('La contraseña debe tener al menos 4 caracteres', 'error');
+    return;
+  }
+  
+  try {
+    const { collection, getDocs, query, where, doc, updateDoc } = window.firestore;
+    
+    // Verificar que el nuevo usuario no exista
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('usuario', '==', nuevoUsuario));
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty && nuevoUsuario !== usuarioActual.usuario) {
+      mostrarNotificacion('El usuario ya existe. Por favor elige otro.', 'error');
+      return;
+    }
+    
+    // Actualizar usuario
+    const usuarioRef = doc(window.db, 'usuarios', usuarioActual.usuario);
+    
+    // Si cambió el usuario, necesitamos crear un nuevo documento y eliminar el anterior
+    if (nuevoUsuario !== usuarioActual.usuario) {
+      const { setDoc, deleteDoc } = window.firestore;
+      
+      // Crear nuevo documento con el nuevo usuario
+      const nuevoUsuarioRef = doc(window.db, 'usuarios', nuevoUsuario);
+      await setDoc(nuevoUsuarioRef, {
+        ...usuarioActual,
+        usuario: nuevoUsuario,
+        contraseña: nuevaContraseña,
+        credencialesModificadas: true
+      });
+      
+      // Eliminar el documento anterior
+      await deleteDoc(usuarioRef);
+      
+      // Actualizar usuario actual
+      usuarioActual.usuario = nuevoUsuario;
+      usuarioActual.contraseña = nuevaContraseña;
+      usuarioActual.credencialesModificadas = true;
+    } else {
+      // Solo actualizar contraseña
+      await updateDoc(usuarioRef, {
+        contraseña: nuevaContraseña,
+        credencialesModificadas: true
+      });
+      
+      usuarioActual.contraseña = nuevaContraseña;
+      usuarioActual.credencialesModificadas = true;
+    }
+    
+    mostrarNotificacion('Credenciales actualizadas correctamente. Por favor, inicia sesión nuevamente.', 'success');
+    
+    // Cerrar formulario
+    cancelarModificacionCuenta();
+    verificarEstadoModificacionCuenta();
+    
+    // Cerrar sesión después de 2 segundos para que el usuario inicie sesión con las nuevas credenciales
+    setTimeout(() => {
+      logout();
+      mostrarNotificacion('Por favor, inicia sesión con tus nuevas credenciales', 'info');
+    }, 2000);
+    
+  } catch (error) {
+    console.error('Error al modificar cuenta:', error);
+    mostrarNotificacion('Error al modificar cuenta', 'error');
+  }
+}
+
+// ============ FUNCIÓN DE DEPURACIÓN (ELIMINAR TODOS LOS ALUMNOS) ============
+
+// Función para eliminar todos los alumnos con doble confirmación
+async function depurarTodosAlumnos() {
+  // PRIMERA CONFIRMACIÓN
+  const primeraConfirmacion = confirm(
+    '⚠️ ADVERTENCIA CRÍTICA ⚠️\n\n' +
+    'Estás a punto de eliminar TODOS los alumnos de la base de datos.\n\n' +
+    'Esta acción:\n' +
+    '- Eliminará todos los alumnos registrados\n' +
+    '- Eliminará todas sus inscripciones\n' +
+    '- NO se puede deshacer\n\n' +
+    '¿Estás ABSOLUTAMENTE seguro de que quieres continuar?'
+  );
+  
+  if (!primeraConfirmacion) {
+    return;
+  }
+  
+  // SEGUNDA CONFIRMACIÓN (doble verificación)
+  const segundaConfirmacion = confirm(
+    '⚠️ ÚLTIMA OPORTUNIDAD ⚠️\n\n' +
+    'Esta es tu segunda y última confirmación.\n\n' +
+    'Si continúas, se eliminarán TODOS los alumnos.\n\n' +
+    'Escribe "ELIMINAR TODO" en el siguiente paso para confirmar.\n\n' +
+    '¿Continuar con la eliminación?'
+  );
+  
+  if (!segundaConfirmacion) {
+    mostrarNotificacion('Operación cancelada', 'success');
+    return;
+  }
+  
+  // TERCERA CONFIRMACIÓN (con texto específico)
+  const textoConfirmacion = prompt(
+    '⚠️ CONFIRMACIÓN FINAL ⚠️\n\n' +
+    'Para confirmar la eliminación de TODOS los alumnos, escribe exactamente:\n\n' +
+    'ELIMINAR TODO\n\n' +
+    '(En mayúsculas, sin espacios extra)'
+  );
+  
+  if (textoConfirmacion !== 'ELIMINAR TODO') {
+    mostrarNotificacion('Texto de confirmación incorrecto. Operación cancelada.', 'warning');
+    return;
+  }
+  
+  try {
+    const { collection, getDocs, query, where, deleteDoc, doc } = window.firestore;
+    
+    // Obtener todos los alumnos
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    if (snapshot.empty) {
+      mostrarNotificacion('No hay alumnos para eliminar', 'warning');
+      return;
+    }
+    
+    let eliminados = 0;
+    let errores = 0;
+    const usuariosParaEliminar = [];
+    
+    // Primero, recopilar todos los usuarios a eliminar
+    snapshot.forEach((docSnap) => {
+      usuariosParaEliminar.push({
+        id: docSnap.id,
+        usuario: docSnap.data().usuario
+      });
+    });
+    
+    // Eliminar cada alumno y sus inscripciones
+    for (const usuarioData of usuariosParaEliminar) {
+      try {
+        // Eliminar el usuario
+        const usuarioRef = doc(window.db, 'usuarios', usuarioData.id);
+        await deleteDoc(usuarioRef);
+        
+        // Eliminar todas sus inscripciones
+        const inscripcionesRef = collection(window.db, 'inscripciones');
+        const qInscripciones = query(inscripcionesRef, where('usuario', '==', usuarioData.usuario));
+        const inscripcionesSnap = await getDocs(qInscripciones);
+        
+        const deletePromises = [];
+        inscripcionesSnap.forEach((inscripcionDoc) => {
+          deletePromises.push(deleteDoc(inscripcionDoc.ref));
+        });
+        await Promise.all(deletePromises);
+        
+        eliminados++;
+      } catch (error) {
+        console.error('Error al eliminar alumno:', error);
+        errores++;
+      }
+    }
+    
+    mostrarNotificacion(
+      `Depuración completada: ${eliminados} alumnos eliminados${errores > 0 ? `, ${errores} errores` : ''}`,
+      eliminados > 0 ? 'success' : 'error'
+    );
+    
+    // Recargar listas
+    cargarListaAlumnos();
+    cargarInscripcionesComedor();
+    cargarEstadisticasDia();
+    
+  } catch (error) {
+    console.error('Error al depurar alumnos:', error);
+    mostrarNotificacion('Error al eliminar alumnos: ' + error.message, 'error');
+  }
+}
+
+// Función para toggle (abrir/cerrar) grupos desplegables
+function toggleGrupo(grupoId) {
+  const grupo = document.getElementById(grupoId);
+  const icon = document.getElementById(grupoId + '-icon');
+  
+  if (grupo.style.display === 'none') {
+    grupo.style.display = 'block';
+    icon.textContent = '▲';
+  } else {
+    grupo.style.display = 'none';
+    icon.textContent = '▼';
+  }
+}
+
+// ============ MEJORA EN INSCRIPCIÓN PARA HORARIOS INDIVIDUALES ============
+
+// Actualizar función de inscripción para guardar horario individual
