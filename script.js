@@ -2,6 +2,7 @@
 let usuarioActual = null;
 let alumnosFiltrados = [];
 let filtroActual = 'todos';
+let filtroOrientacion = 'todas'; // 'todas', 'INF', 'MEC'
 let datosExcelImportados = null; // Para almacenar datos del Excel antes de importar
 
 // Esperar a que Firebase esté listo
@@ -20,7 +21,7 @@ async function inicializarDatos() {
     // Si no hay usuarios, crear el admin y alumnos de ejemplo
     if (snapshot.empty) {
       const usuarios = [
-        { usuario: 'admin', contraseña: 'admin123', tipo: 'admin' },
+        { usuario: 'admin', contraseña: 'ADMIN25cet1', tipo: 'admin' },
         { usuario: 'alumno1', contraseña: 'alumno123', tipo: 'alumno', nombre: 'Juan Pérez', cursoDivision: '4to 1ra', emailTutores: 'padres.juan@ejemplo.com', strikes: 0, notificadoStrikes: false, bloqueado: false },
         { usuario: 'alumno2', contraseña: 'alumno123', tipo: 'alumno', nombre: 'María García', cursoDivision: 'CB 2do 1ra', emailTutores: 'padres.maria@ejemplo.com', strikes: 0, notificadoStrikes: false, bloqueado: false }
       ];
@@ -29,6 +30,9 @@ async function inicializarDatos() {
         await setDoc(doc(window.db, 'usuarios', user.usuario), user);
       }
       console.log('Usuarios iniciales creados');
+      console.log('🔐 CREDENCIALES DE ADMINISTRADOR:');
+      console.log('Usuario: admin');
+      console.log('Contraseña: ADMIN25cet1');
     }
   } catch (error) {
     console.error('Error al inicializar datos:', error);
@@ -157,7 +161,7 @@ async function obtenerConfiguracion() {
 }
 
 async function login() {
-  const usuario = document.getElementById('usuario').value;
+  const usuario = document.getElementById('usuario').value.trim();
   const contraseña = document.getElementById('contraseña').value;
   
   // Verificar que los campos no estén vacíos
@@ -196,6 +200,7 @@ async function login() {
         cargarEstadisticasDia();
         cargarNotificaciones();
         cargarConfiguracionHorarios();
+        cargarAlumnosParaNotificaciones(); // Cargar alumnos en el select de notificaciones
         mostrarNotificacion('Bienvenido, Administrador', 'success');
       } else {
         document.getElementById('menuAlumno').classList.remove('oculto');
@@ -237,11 +242,20 @@ async function registrarAlumno() {
   const usuario = document.getElementById('usuarioAlumno').value;
   const contraseña = document.getElementById('contraseñaAlumno').value;
   const emailTutores = document.getElementById('emailTutores').value;
+  const ciclo = document.getElementById('cicloAlumno').value;
   const curso = document.getElementById('cursoAlumno').value;
+  const orientacion = document.getElementById('orientacionAlumno').value;
   const division = document.getElementById('divisionAlumno').value;
   
-  if (!nombre || !usuario || !contraseña || !emailTutores || !curso || !division) {
-    mostrarNotificacion('Por favor complete todos los campos', 'warning');
+  // Validar campos básicos
+  if (!nombre || !usuario || !contraseña || !emailTutores || !ciclo || !curso || !division) {
+    mostrarNotificacion('Por favor complete todos los campos obligatorios', 'warning');
+    return;
+  }
+  
+  // Validar que si es CS, tenga orientación
+  if (ciclo === 'CS' && !orientacion) {
+    mostrarNotificacion('Por favor seleccione una orientación para Ciclo Superior', 'warning');
     return;
   }
   
@@ -263,20 +277,32 @@ async function registrarAlumno() {
       return;
     }
     
-    // Construir cursoDivision
-    const cursoDivision = `${curso} ${division}`;
+    // Construir cursoDivision con formato correcto: "2°3° CB" o "2°3° CS INF"
+    let cursoDivision = '';
+    if (ciclo === 'CB') {
+      cursoDivision = `${curso}°${division}° CB`;
+    } else if (ciclo === 'CS') {
+      cursoDivision = `${curso}°${division}° CS ${orientacion}`;
+    } else {
+      cursoDivision = `${curso}°${division}°`;
+    }
     
-    // Agregar el nuevo alumno
+    // Agregar el nuevo alumno con todos los campos
     const nuevoAlumno = {
       usuario: usuario,
       contraseña: contraseña,
       tipo: 'alumno',
       nombre: nombre,
       cursoDivision: cursoDivision,
+      ciclo: ciclo,
+      curso: curso,
+      orientacion: ciclo === 'CS' ? orientacion : '',
+      division: division,
       emailTutores: emailTutores,
       strikes: 0,
       notificadoStrikes: false,
-      bloqueado: false
+      bloqueado: false,
+      credencialesModificadas: false
     };
     
     await setDoc(doc(window.db, 'usuarios', usuario), nuevoAlumno);
@@ -417,6 +443,7 @@ async function cargarListaAlumnos() {
     // Inicializar filtros
     alumnosFiltrados = [];
     filtroActual = 'todos';
+    filtroOrientacion = 'todas';
     document.getElementById('buscarAlumno').value = '';
     
     const { collection, getDocs, query, where } = window.firestore;
@@ -436,8 +463,8 @@ async function cargarListaAlumnos() {
       return;
     }
     
-    // Mostrar todos los alumnos
-    mostrarAlumnosFiltrados(alumnos);
+    // Aplicar todos los filtros antes de mostrar
+    aplicarTodosLosFiltros();
   } catch (error) {
     console.error('Error al cargar alumnos:', error);
     mostrarNotificacion('Error al cargar alumnos', 'error');
@@ -1012,7 +1039,7 @@ async function cargarInscripcionesComedor() {
   }
 }
 
-// FUNCIÓN REESCRITA COMPLETAMENTE PARA GARANTIZAR FALTAS INDIVIDUALES
+// FUNCIÓN REESCRITA COMPLETAMENTE PARA GARANTIZAR FALTAS INDIVIDUALES Y ÚNICAS
 async function marcarAsistenciaComedor(inscripcionId, usuario, presente) {
   try {
     const { doc, updateDoc, getDoc } = window.firestore;
@@ -1038,56 +1065,86 @@ async function marcarAsistenciaComedor(inscripcionId, usuario, presente) {
       return;
     }
     
+    // PASO 2.5: Verificar si la inscripción ya fue marcada
+    // Si ya estaba marcada como falta (presente === false) y se vuelve a marcar como falta, no hacer nada
+    // Si ya estaba marcada como presente (presente === true) y se marca como falta, decrementar strike
+    const estabaMarcadaComoFalta = datosInscripcion.presente === false;
+    const estabaMarcadaComoPresente = datosInscripcion.presente === true;
+    
     // PASO 3: Actualizar SOLO esta inscripción específica
     await updateDoc(inscripcionRef, { 
       presente: presente,
       fechaMarcado: new Date().toISOString()
     });
     
-    // PASO 4: Si el alumno falta, agregar strike SOLO a este usuario específico
+    // PASO 4: Gestionar strikes SOLO para este usuario específico
+    const usuarioRef = doc(window.db, 'usuarios', datosInscripcion.usuario);
+    const usuarioSnap = await getDoc(usuarioRef);
+    
+    if (!usuarioSnap.exists()) {
+      console.error('Usuario no encontrado en base de datos:', datosInscripcion.usuario);
+      mostrarNotificacion('Error: Usuario no encontrado', 'error');
+      return;
+    }
+    
+    const datosUsuario = usuarioSnap.data();
+    let strikesActuales = datosUsuario.strikes || 0;
+    
     if (!presente) {
-      // Obtener el documento del usuario específico usando el usuario exacto de la inscripción
-      const usuarioRef = doc(window.db, 'usuarios', datosInscripcion.usuario);
-      const usuarioSnap = await getDoc(usuarioRef);
-      
-      if (!usuarioSnap.exists()) {
-        console.error('Usuario no encontrado en base de datos:', datosInscripcion.usuario);
-        mostrarNotificacion('Error: Usuario no encontrado', 'error');
-        return;
-      }
-      
-      // Obtener datos actuales del usuario
-      const datosUsuario = usuarioSnap.data();
-      const strikesActuales = (datosUsuario.strikes || 0) + 1;
-      
-      // Actualizar strikes SOLO en este documento específico
-      await updateDoc(usuarioRef, { 
-        strikes: strikesActuales 
-      });
-      
-      console.log(`Falta aplicada a ${datosUsuario.nombre} (${datosInscripcion.usuario}). Total: ${strikesActuales}`);
-      
-      // Si llega a 3 strikes y no se ha notificado antes
-      if (strikesActuales >= 3 && !datosUsuario.notificadoStrikes) {
-        await enviarNotificacionTutores({
-          ...datosUsuario,
-          strikes: strikesActuales
-        });
+      // Si se marca como falta
+      if (!estabaMarcadaComoFalta) {
+        // Solo incrementar si NO estaba ya marcada como falta (para evitar duplicados)
+        // Verificar que no supere el máximo de 3 faltas
+        if (strikesActuales >= 3) {
+          mostrarNotificacion(`${datosUsuario.nombre} ya tiene 3 faltas. No se puede agregar más.`, 'warning');
+          return;
+        }
+        strikesActuales = strikesActuales + 1;
+        
+        // Actualizar strikes SOLO en este documento específico
         await updateDoc(usuarioRef, { 
-          notificadoStrikes: true,
-          bloqueado: true
+          strikes: strikesActuales 
         });
-        mostrarNotificacion(`${datosUsuario.nombre} ha sido bloqueado del comedor`, 'warning');
+        
+        console.log(`Falta única aplicada a ${datosUsuario.nombre} (${datosInscripcion.usuario}). Total: ${strikesActuales}`);
+        
+        // Si llega a 3 strikes, bloquear pero NO enviar notificación automática
+        // La notificación ahora será manual desde el panel de admin
+        if (strikesActuales >= 3) {
+          await updateDoc(usuarioRef, { 
+            bloqueado: true
+          });
+          mostrarNotificacion(`${datosUsuario.nombre} ha alcanzado 3 faltas y ha sido bloqueado. Recuerde enviar la notificación manual a los tutores.`, 'warning');
+        }
+        
+        // Si es el usuario actual, actualizar su interfaz
+        if (usuarioActual && usuarioActual.usuario === datosInscripcion.usuario) {
+          usuarioActual.strikes = strikesActuales;
+          verificarStrikes();
+        }
+      } else {
+        // Ya estaba marcada como falta, no hacer nada (evitar duplicados)
+        mostrarNotificacion(`La falta de ${datosUsuario.nombre} ya estaba registrada anteriormente`, 'warning');
+      }
+    } else {
+      // Si se marca como presente
+      if (estabaMarcadaComoFalta) {
+        // Si antes estaba marcada como falta y ahora como presente, decrementar strike (solo si tiene más de 0)
+        if (strikesActuales > 0) {
+          strikesActuales = strikesActuales - 1;
+          await updateDoc(usuarioRef, { 
+            strikes: strikesActuales,
+            bloqueado: false, // Desbloquear si tenía 3 faltas
+            notificadoStrikes: false // Resetear notificación
+          });
+          
+          console.log(`Falta removida de ${datosUsuario.nombre} (${datosInscripcion.usuario}). Total: ${strikesActuales}`);
+        }
       }
       
       // Si es el usuario actual, actualizar su interfaz
       if (usuarioActual && usuarioActual.usuario === datosInscripcion.usuario) {
         usuarioActual.strikes = strikesActuales;
-        verificarStrikes();
-      }
-    } else {
-      // Si el alumno está presente, actualizar la interfaz si es el usuario actual
-      if (usuarioActual && usuarioActual.usuario === datosInscripcion.usuario) {
         verificarStrikes();
         setTimeout(() => {
           verificarInscripcionComedor();
@@ -1109,7 +1166,7 @@ async function marcarAsistenciaComedor(inscripcionId, usuario, presente) {
     
     mostrarNotificacion(
       presente ? `Asistencia marcada para ${datosInscripcion.nombre}` : 
-                 `Falta registrada para ${datosInscripcion.nombre}`,
+                 `Falta única registrada para ${datosInscripcion.nombre} (${strikesActuales}/3)`,
       presente ? 'success' : 'warning'
     );
     
@@ -1222,13 +1279,20 @@ async function filtrarAlumnos() {
       alumnos.push({ id: doc.id, ...doc.data() });
     });
     
-    alumnosFiltrados = alumnos.filter(alumno => 
-      alumno.nombre.toLowerCase().includes(busqueda) || 
-      alumno.usuario.toLowerCase().includes(busqueda) ||
-      (alumno.cursoDivision && alumno.cursoDivision.toLowerCase().includes(busqueda))
-    );
+    // Si hay búsqueda, filtrar por texto
+    if (busqueda) {
+      alumnosFiltrados = alumnos.filter(alumno => 
+        alumno.nombre.toLowerCase().includes(busqueda) || 
+        alumno.usuario.toLowerCase().includes(busqueda) ||
+        (alumno.cursoDivision && alumno.cursoDivision.toLowerCase().includes(busqueda))
+      );
+    } else {
+      // Si no hay búsqueda, usar todos los alumnos
+      alumnosFiltrados = alumnos;
+    }
     
-    aplicarFiltroStrikes();
+    // Aplicar todos los filtros restantes (strikes y orientación)
+    aplicarTodosLosFiltros();
   } catch (error) {
     console.error('Error al filtrar alumnos:', error);
   }
@@ -1249,23 +1313,65 @@ async function filtrarPorStrikes(tipo) {
       alumnosFiltrados.push({ id: doc.id, ...doc.data() });
     });
     
-    aplicarFiltroStrikes();
+    aplicarTodosLosFiltros();
   } catch (error) {
     console.error('Error al filtrar por strikes:', error);
   }
 }
 
-// Aplicar filtro de strikes
-function aplicarFiltroStrikes() {
+// Función para filtrar por orientación
+async function filtrarPorOrientacion(orientacion) {
+  filtroOrientacion = orientacion;
+  
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    alumnosFiltrados = [];
+    snapshot.forEach(doc => {
+      alumnosFiltrados.push({ id: doc.id, ...doc.data() });
+    });
+    
+    aplicarTodosLosFiltros();
+  } catch (error) {
+    console.error('Error al filtrar por orientación:', error);
+  }
+}
+
+// Aplicar todos los filtros (strikes + orientación + búsqueda)
+function aplicarTodosLosFiltros() {
   let alumnosParaMostrar = alumnosFiltrados;
   
+  // Aplicar filtro de strikes
   if (filtroActual === 'con-strikes') {
-    alumnosParaMostrar = alumnosFiltrados.filter(alumno => (alumno.strikes || 0) > 0);
+    alumnosParaMostrar = alumnosParaMostrar.filter(alumno => (alumno.strikes || 0) > 0);
   } else if (filtroActual === 'sin-strikes') {
-    alumnosParaMostrar = alumnosFiltrados.filter(alumno => (alumno.strikes || 0) === 0);
+    alumnosParaMostrar = alumnosParaMostrar.filter(alumno => (alumno.strikes || 0) === 0);
+  }
+  
+  // Aplicar filtro de orientación
+  if (filtroOrientacion !== 'todas') {
+    alumnosParaMostrar = alumnosParaMostrar.filter(alumno => {
+      // Verificar si el alumno pertenece a la orientación seleccionada
+      if (filtroOrientacion === 'INF') {
+        return (alumno.orientacion === 'INF' || 
+                (alumno.cursoDivision && alumno.cursoDivision.includes('INF')));
+      } else if (filtroOrientacion === 'MEC') {
+        return (alumno.orientacion === 'MEC' || 
+                (alumno.cursoDivision && alumno.cursoDivision.includes('MEC')));
+      }
+      return true;
+    });
   }
   
   mostrarAlumnosFiltrados(alumnosParaMostrar);
+}
+
+// Mantener función antigua para compatibilidad
+function aplicarFiltroStrikes() {
+  aplicarTodosLosFiltros();
 }
 
 // Mostrar alumnos filtrados agrupados por curso/división
@@ -1482,8 +1588,8 @@ function mostrarNotificacion(mensaje, tipo = 'success') {
   }, 4000);
 }
 
-// Función para enviar notificación a tutores
-async function enviarNotificacionTutores(alumno) {
+// Función para enviar notificación a tutores (ahora solo guarda en historial, no envía email automático)
+async function enviarNotificacionTutores(alumno, mensajePersonalizado, asunto) {
   try {
     const { collection, addDoc } = window.firestore;
     const notificacionesRef = collection(window.db, 'notificaciones');
@@ -1494,18 +1600,247 @@ async function enviarNotificacionTutores(alumno) {
       usuario: alumno.usuario,
       emailTutores: alumno.emailTutores,
       strikes: alumno.strikes,
-      mensaje: `Estimados padres/tutores de ${alumno.nombre}: Les informamos que su hijo/a ha acumulado ${alumno.strikes} faltas en el comedor escolar. Por favor, comuníquese con la institución para más información.`
+      mensaje: mensajePersonalizado || `Estimados padres/tutores de ${alumno.nombre}: Les informamos que su hijo/a ha acumulado ${alumno.strikes} faltas en el comedor escolar. Por favor, comuníquese con la institución para más información.`,
+      asunto: asunto || 'Notificación de faltas en el comedor escolar'
     };
     
     await addDoc(notificacionesRef, nuevaNotificacion);
     
-    console.log('📧 Notificación enviada a:', alumno.emailTutores);
-    console.log('Mensaje:', nuevaNotificacion.mensaje);
-    
-    mostrarNotificacion(`Notificación enviada a tutores de ${alumno.nombre}`, 'success');
+    console.log('📧 Notificación guardada en historial para:', alumno.emailTutores);
   } catch (error) {
-    console.error('Error al enviar notificación:', error);
+    console.error('Error al guardar notificación:', error);
   }
+}
+
+// ============ FUNCIONES PARA NOTIFICACIONES MANUALES ============
+
+// Cargar alumnos en el select de notificaciones
+async function cargarAlumnosParaNotificaciones() {
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('tipo', '==', 'alumno'));
+    const snapshot = await getDocs(q);
+    
+    const selectAlumnos = document.getElementById('alumnoSeleccionadoNotificacion');
+    selectAlumnos.innerHTML = '<option value="">Seleccionar alumno...</option>';
+    
+    snapshot.forEach((doc) => {
+      const alumno = doc.data();
+      const option = document.createElement('option');
+      option.value = alumno.usuario;
+      option.textContent = `${alumno.nombre} - ${alumno.cursoDivision || 'Sin curso'}`;
+      selectAlumnos.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error al cargar alumnos para notificaciones:', error);
+  }
+}
+
+// Cargar datos del alumno seleccionado
+async function cargarDatosAlumnoParaNotificacion() {
+  const usuarioSeleccionado = document.getElementById('alumnoSeleccionadoNotificacion').value;
+  
+  if (!usuarioSeleccionado) {
+    document.getElementById('infoAlumnoNotificacion').classList.add('oculto');
+    return;
+  }
+  
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('usuario', '==', usuarioSeleccionado));
+    const snapshot = await getDocs(q);
+    
+    if (snapshot.empty) {
+      mostrarNotificacion('Alumno no encontrado', 'error');
+      return;
+    }
+    
+    let alumno = null;
+    snapshot.forEach((doc) => {
+      alumno = doc.data();
+    });
+    
+    // Obtener faltas con fechas y horas
+    const faltasConFechas = await obtenerFaltasAlumno(usuarioSeleccionado);
+    
+    // Mostrar información del alumno
+    const detallesDiv = document.getElementById('detallesAlumnoNotificacion');
+    let html = `
+      <p><strong>Nombre:</strong> ${alumno.nombre}</p>
+      <p><strong>Curso:</strong> ${alumno.cursoDivision || 'No especificado'}</p>
+      <p><strong>Email de Tutores:</strong> ${alumno.emailTutores || 'No especificado'}</p>
+      <p><strong>Faltas Acumuladas:</strong> <span style="color: var(--danger); font-weight: bold;">${alumno.strikes || 0}</span></p>
+    `;
+    
+    if (faltasConFechas.length > 0) {
+      html += `<div style="margin-top: 15px;"><strong>Detalle de Faltas:</strong><ul style="margin: 10px 0; padding-left: 20px;">`;
+      faltasConFechas.forEach(falta => {
+        const fecha = new Date(falta.fechaMarcado || falta.fecha);
+        const fechaFormateada = fecha.toLocaleDateString('es-ES', { 
+          day: '2-digit', 
+          month: '2-digit', 
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        html += `<li>${fechaFormateada}</li>`;
+      });
+      html += `</ul></div>`;
+    }
+    
+    detallesDiv.innerHTML = html;
+    document.getElementById('infoAlumnoNotificacion').classList.remove('oculto');
+    
+    // Auto-completar mensaje y asunto
+    const asuntoInput = document.getElementById('asuntoNotificacion');
+    const mensajeInput = document.getElementById('mensajeNotificacion');
+    
+    if (!asuntoInput.value) {
+      asuntoInput.value = `Notificación de faltas en el comedor escolar - ${alumno.nombre}`;
+    }
+    
+    if (!mensajeInput.value) {
+      let mensaje = `Estimados padres/tutores de ${alumno.nombre}:\n\n`;
+      mensaje += `Les informamos que su hijo/a ha acumulado ${alumno.strikes || 0} falta(s) en el comedor escolar del CET N°1 General Roca.\n\n`;
+      
+      if (faltasConFechas.length > 0) {
+        mensaje += `Detalle de faltas:\n`;
+        faltasConFechas.forEach((falta, index) => {
+          const fecha = new Date(falta.fechaMarcado || falta.fecha);
+          const fechaFormateada = fecha.toLocaleDateString('es-ES', { 
+            day: '2-digit', 
+            month: '2-digit', 
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          mensaje += `${index + 1}. ${fechaFormateada}\n`;
+        });
+        mensaje += `\n`;
+      }
+      
+      mensaje += `Por favor, les solicitamos que se comuniquen con la institución para más información.\n\n`;
+      mensaje += `Saludos cordiales,\nAdministración del Comedor CET N°1 General Roca`;
+      
+      mensajeInput.value = mensaje;
+    }
+  } catch (error) {
+    console.error('Error al cargar datos del alumno:', error);
+    mostrarNotificacion('Error al cargar datos del alumno', 'error');
+  }
+}
+
+// Obtener faltas de un alumno con fechas y horas
+async function obtenerFaltasAlumno(usuario) {
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const inscripcionesRef = collection(window.db, 'inscripciones');
+    const q = query(inscripcionesRef, 
+      where('usuario', '==', usuario), 
+      where('presente', '==', false)
+    );
+    const snapshot = await getDocs(q);
+    
+    const faltas = [];
+    snapshot.forEach((doc) => {
+      const inscripcion = doc.data();
+      faltas.push({
+        fecha: inscripcion.fecha,
+        fechaMarcado: inscripcion.fechaMarcado,
+        hora: inscripcion.hora
+      });
+    });
+    
+    // Ordenar por fecha más reciente primero
+    faltas.sort((a, b) => {
+      const fechaA = new Date(a.fechaMarcado || a.fecha);
+      const fechaB = new Date(b.fechaMarcado || b.fecha);
+      return fechaB - fechaA;
+    });
+    
+    return faltas;
+  } catch (error) {
+    console.error('Error al obtener faltas del alumno:', error);
+    return [];
+  }
+}
+
+// Generar link de Gmail
+async function generarLinkGmail() {
+  const usuarioSeleccionado = document.getElementById('alumnoSeleccionadoNotificacion').value;
+  const asunto = document.getElementById('asuntoNotificacion').value.trim();
+  const mensaje = document.getElementById('mensajeNotificacion').value.trim();
+  
+  if (!usuarioSeleccionado) {
+    mostrarNotificacion('Por favor seleccione un alumno', 'warning');
+    return;
+  }
+  
+  if (!asunto || !mensaje) {
+    mostrarNotificacion('Por favor complete el asunto y el mensaje', 'warning');
+    return;
+  }
+  
+  try {
+    const { collection, getDocs, query, where } = window.firestore;
+    const usuariosRef = collection(window.db, 'usuarios');
+    const q = query(usuariosRef, where('usuario', '==', usuarioSeleccionado));
+    const snapshot = await getDocs(q);
+    
+    if (snapshot.empty) {
+      mostrarNotificacion('Alumno no encontrado', 'error');
+      return;
+    }
+    
+    let alumno = null;
+    snapshot.forEach((doc) => {
+      alumno = doc.data();
+    });
+    
+    const emailTutores = alumno.emailTutores;
+    
+    if (!emailTutores) {
+      mostrarNotificacion('El alumno no tiene email de tutores registrado', 'error');
+      return;
+    }
+    
+    // Codificar para URL
+    const asuntoCodificado = encodeURIComponent(asunto);
+    const mensajeCodificado = encodeURIComponent(mensaje);
+    
+    // Crear link de Gmail
+    const linkGmail = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(emailTutores)}&su=${asuntoCodificado}&body=${mensajeCodificado}`;
+    
+    // Mostrar el link
+    const linkDiv = document.getElementById('linkGmailGenerado');
+    const linkElement = document.getElementById('linkGmail');
+    linkElement.href = linkGmail;
+    
+    linkDiv.classList.remove('oculto');
+    
+    // Guardar en historial de notificaciones
+    await enviarNotificacionTutores(alumno, mensaje, asunto);
+    
+    // Recargar historial
+    cargarNotificaciones();
+    
+    mostrarNotificacion('Link de Gmail generado correctamente. Haga clic en el botón para abrir Gmail', 'success');
+  } catch (error) {
+    console.error('Error al generar link de Gmail:', error);
+    mostrarNotificacion('Error al generar link de Gmail', 'error');
+  }
+}
+
+// Limpiar formulario de notificación
+function limpiarFormularioNotificacion() {
+  document.getElementById('alumnoSeleccionadoNotificacion').value = '';
+  document.getElementById('asuntoNotificacion').value = '';
+  document.getElementById('mensajeNotificacion').value = '';
+  document.getElementById('infoAlumnoNotificacion').classList.add('oculto');
+  document.getElementById('linkGmailGenerado').classList.add('oculto');
+  mostrarNotificacion('Formulario limpiado', 'success');
 }
 
 // Función para cargar estadísticas del día
@@ -1600,9 +1935,12 @@ async function cargarNotificaciones() {
               <strong>Email:</strong> ${notif.emailTutores}
             </div>
             <div style="font-size: 14px; color: #666; margin-bottom: 5px;">
+              <strong>Asunto:</strong> ${notif.asunto || 'Notificación de faltas en el comedor escolar'}
+            </div>
+            <div style="font-size: 14px; color: #666; margin-bottom: 5px;">
               <strong>Fecha:</strong> ${fechaFormateada}
             </div>
-            <div style="background-color: #f8f9fa; padding: 10px; border-radius: 6px; margin-top: 8px; font-size: 14px;">
+            <div style="background-color: #f8f9fa; padding: 10px; border-radius: 6px; margin-top: 8px; font-size: 14px; white-space: pre-wrap;">
               ${notif.mensaje}
             </div>
           </div>

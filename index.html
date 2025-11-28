@@ -156,7 +156,45 @@
         </div>
 
         <div class="card">
-          <h3>Notificaciones Enviadas a Tutores</h3>
+          <h3>📧 Notificaciones Manuales a Tutores</h3>
+          <p style="color: #666; margin-bottom: 15px;">Redacte y envíe notificaciones por email a los tutores de los alumnos</p>
+          
+          <div class="form-group">
+            <label for="alumnoSeleccionadoNotificacion">Seleccionar Alumno:</label>
+            <select id="alumnoSeleccionadoNotificacion" onchange="cargarDatosAlumnoParaNotificacion()">
+              <option value="">Seleccionar alumno...</option>
+            </select>
+          </div>
+          
+          <div id="infoAlumnoNotificacion" class="oculto" style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+            <h4>Información del Alumno</h4>
+            <div id="detallesAlumnoNotificacion"></div>
+          </div>
+          
+          <div class="form-group">
+            <label for="asuntoNotificacion">Asunto del Email:</label>
+            <input type="text" id="asuntoNotificacion" placeholder="Ej: Notificación de faltas en el comedor escolar">
+          </div>
+          
+          <div class="form-group">
+            <label for="mensajeNotificacion">Mensaje del Email:</label>
+            <textarea id="mensajeNotificacion" rows="8" placeholder="Redacte el mensaje que se enviará a los tutores..."></textarea>
+          </div>
+          
+          <div class="button-group">
+            <button class="btn-success" onclick="generarLinkGmail()">📧 Generar Link de Gmail</button>
+            <button class="btn-secondary" onclick="limpiarFormularioNotificacion()">Limpiar</button>
+          </div>
+          
+          <div id="linkGmailGenerado" class="oculto" style="margin-top: 20px; padding: 15px; background: #e6f7ff; border-radius: 8px; border-left: 4px solid var(--primary);">
+            <h4>Link de Gmail Generado:</h4>
+            <p style="color: #666; margin: 10px 0;">Haga clic en el botón para abrir Gmail con el mensaje pre-llenado:</p>
+            <a id="linkGmail" href="#" target="_blank" style="display: inline-block; padding: 12px 20px; background: var(--primary); color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">📧 Abrir en Gmail</a>
+          </div>
+        </div>
+        
+        <div class="card">
+          <h3>Historial de Notificaciones Enviadas</h3>
           <div id="listaNotificaciones"></div>
         </div>
 
@@ -172,6 +210,12 @@
             <button class="btn-secondary" onclick="filtrarPorStrikes('todos')">Todos</button>
             <button class="btn-warning" onclick="filtrarPorStrikes('con-strikes')">Con Faltas</button>
             <button class="btn-success" onclick="filtrarPorStrikes('sin-strikes')">Sin Faltas</button>
+          </div>
+          
+          <div class="button-group">
+            <button class="btn-primary" onclick="filtrarPorOrientacion('INF')" style="background: #4a90e2;">💻 Informática</button>
+            <button class="btn-primary" onclick="filtrarPorOrientacion('MEC')" style="background: #e67e22;">🔧 Mecánica</button>
+            <button class="btn-secondary" onclick="filtrarPorOrientacion('todas')">Todas las Orientaciones</button>
             <button class="btn-primary" onclick="exportarAlumnosAExcel()">📥 Exportar a Excel</button>
           </div>
           
